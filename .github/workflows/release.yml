@@ -328,19 +328,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # secrets is not a valid context in step `if`, so surface it through job
+    # env (which IS readable from `if`) and gate on env instead. SSHPASS is
+    # what sshpass -e reads, so the password never touches argv.
+    env:
+      VPS_SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+      VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+      VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+      SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
     steps:
       - name: Notice when VPS deploy is not configured
-        if: ${{ secrets.VPS_SSH_HOST == '' || secrets.VPS_SSH_PASSWORD == '' }}
+        if: env.VPS_SSH_HOST == '' || env.SSHPASS == ''
         run: |
           echo "::notice::VPS_SSH_HOST / VPS_SSH_PASSWORD not set — skipping VPS deploy."
 
       - name: Run deploy script on the VPS over SSH
-        if: ${{ secrets.VPS_SSH_HOST != '' && secrets.VPS_SSH_PASSWORD != '' }}
-        env:
-          VPS_SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
-          SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
+        if: env.VPS_SSH_HOST != '' && env.SSHPASS != ''
         run: |
           set -euo pipefail
           sudo apt-get update -qq
