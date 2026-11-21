@@ -1,9 +1,15 @@
 name: Release
 
-# Every push to master produces a new version: a semver release (vX.Y.Z) plus a
-# moving `latest` release, both carrying the six single-binary archives, and
-# multi-arch container images pushed to GHCR and (when configured) Docker Hub.
-# Pushing a v* tag publishes exactly that version instead of bumping.
+# Every push to master produces a new version: one immutable semver release
+# (vX.Y.Z) carrying the six single-binary archives, plus multi-arch container
+# images pushed to GHCR and (when configured) Docker Hub. The Docker image keeps
+# a moving `latest` tag; GitHub Releases deliberately do NOT (the newest semver
+# release is GitHub's "Latest" by default). Pushing a v* tag publishes exactly
+# that version instead of bumping.
+#
+# When everything succeeds and VPS_SSH_* secrets are configured, a final job
+# SSHes into the VPS and runs `bash /ga/script/deploy-splash.sh`; without the
+# secrets the deploy step is skipped.
 #
 # Versioning is semver, the industry default: patch bumps on every push,
 # [minor] / [major] in the head commit message bump those components, and
@@ -173,7 +179,7 @@ jobs:
           cd dist
           sha256sum --check --strict SHA256SUMS
 
-      - name: Tag and publish the semver release and the moving latest release
+      - name: Tag and publish the semver release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: v${{ needs.version.outputs.version }}
@@ -207,20 +213,13 @@ jobs:
           EOF
           )
 
-          # The semver release is immutable history; --latest=false keeps the
-          # "Latest" badge on the moving `latest` release created below.
+          # One immutable release per version. GitHub automatically badges the
+          # newest non-prerelease release as "Latest"; there is deliberately NO
+          # separate moving `latest` release/tag (the Docker image keeps its
+          # own `latest` tag, which is a different thing).
           gh release create "$VERSION" \
             dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
-            --title "splash $VERSION" --notes "$notes" --latest=false
-
-          # Moving target: replace the previous `latest` release and tag so
-          # there is exactly one `latest` release, always the newest build.
-          gh release delete latest --yes --cleanup-tag || true
-          git tag -f latest "$GITHUB_SHA"
-          git push -f origin latest
-          gh release create latest \
-            dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
-            --title "latest (newest build $VERSION)" --notes "$notes"
+            --title "splash $VERSION" --notes "$notes"
 
   docker:
     name: Container images (GHCR + Docker Hub, multi-arch)
@@ -319,3 +318,38 @@ jobs:
         if: env.DOCKERHUB_USERNAME == ''
         run: |
           echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set — images published to GHCR only."
+
+  # Runs only after BOTH release and docker succeed. SSHes into the VPS and
+  # runs the operator's deploy script. Skipped entirely when the VPS_SSH_*
+  # secrets are absent, so forks / unconfigured repos still publish releases.
+  deploy:
+    name: Deploy to VPS (SSH)
+    needs: [release, docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Notice when VPS deploy is not configured
+        if: ${{ secrets.VPS_SSH_HOST == '' || secrets.VPS_SSH_PASSWORD == '' }}
+        run: |
+          echo "::notice::VPS_SSH_HOST / VPS_SSH_PASSWORD not set — skipping VPS deploy."
+
+      - name: Run deploy script on the VPS over SSH
+        if: ${{ secrets.VPS_SSH_HOST != '' && secrets.VPS_SSH_PASSWORD != '' }}
+        env:
+          VPS_SSH_HOST: ${{ secrets.VPS_SSH_HOST }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          SSHPASS: ${{ secrets.VPS_SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+          # sshpass -e reads the password from SSHPASS (not argv). accept-new
+          # pins the host key on first contact (TOFU) instead of disabling checks.
+          sshpass -e ssh \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=30 \
+            -p "${VPS_SSH_PORT:-22}" \
+            "$VPS_SSH_USER@$VPS_SSH_HOST" \
+            'bash /ga/script/deploy-splash.sh'

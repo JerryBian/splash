@@ -74,7 +74,12 @@ export type ProjectStatus = {
   /** RFC 3339; interval_hours only. */
   dueAt?: string
   lastCheckinAt?: string
+  /** Prerequisite project ids not resolved today (gate still closed). */
+  unmet: string[]
 }
+
+/** How completion is measured, orthogonal to the schedule (period layout). */
+export type ProjectMode = 'check' | 'value'
 
 export type Project = {
   id: string
@@ -87,6 +92,8 @@ export type Project = {
   /** Hidden from anonymous visitors. */
   private: boolean
   schedule: ScheduleType
+  /** check = one tick completes the period; value = accumulate to target. */
+  mode: ProjectMode
   target: number
   unit: string
   /** 1 (Monday) .. 7 (Sunday); only for the weekdays schedule. */
@@ -95,6 +102,8 @@ export type Project = {
   interval: number
   startDate: string
   archived: boolean
+  /** Project ids that must be resolved the same day before this one unlocks. */
+  prerequisites: string[]
   createdAt: string
   updatedAt: string
   /** Revision counter; sent back as If-Match to detect lost updates. */
@@ -113,6 +122,12 @@ export type Checkin = {
   localDate: string
   checkedAt: string
   tzOffset: number
+  /** Recorded on a later calendar day than the day it credits. */
+  backfilled: boolean
+  /** Derived: landed while a prerequisite was unmet on localDate. */
+  violated: boolean
+  /** Derived: prerequisite project ids unmet on localDate. */
+  unmet: string[]
   createdAt: string
 }
 
@@ -150,6 +165,8 @@ export type Totals = {
   completionRate: number
   onTimeRate: number
   lateCount: number
+  backfilled: number
+  violations: number
 }
 
 export type ProjectStats = {
@@ -170,6 +187,8 @@ export type Overview = {
   categories: { id: string; name: string; icon: string; color: InkColor; count: number }[]
   leaders: { id: string; name: string; icon: string; color: InkColor; streak: number; bestStreak: number }[]
   trend: { weekStart: string; count: number }[]
+  violations: number
+  recentViolations: Checkin[]
 }
 
 export type ProjectInput = {
@@ -180,11 +199,13 @@ export type ProjectInput = {
   categoryId?: string
   private?: boolean
   schedule: ScheduleType
+  mode?: ProjectMode
   target?: number
   unit?: string
   weekdays?: number[]
   interval?: number
   startDate: string
+  prerequisites?: string[]
 }
 
 /** A partial update; an omitted field means "leave it alone". */
@@ -197,12 +218,15 @@ export type ProjectPatch = {
   categoryId?: string
   private?: boolean
   schedule?: ScheduleType
+  mode?: ProjectMode
   target?: number
   unit?: string
   weekdays?: number[]
   interval?: number
   startDate?: string
   archived?: boolean
+  /** Replaces the whole prerequisite list; [] clears it. */
+  prerequisites?: string[]
 }
 
 export type CheckinInput = {

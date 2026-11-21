@@ -4,8 +4,13 @@
  * nothing here re-derives streaks or periods, so the two ends cannot disagree.
  */
 
-import type { DayStatus, HeatCell, Project } from '../api/types'
+import type { DayStatus, HeatCell, Project, ProjectMode } from '../api/types'
 import { parseDay } from './date'
+
+/** Human label for the completion mode (orthogonal to the schedule). */
+export function modeLabel(mode: ProjectMode): string {
+  return mode === 'check' ? '打勾一次' : '累计数量'
+}
 
 export const STATUS_LABEL: Record<DayStatus, string> = {
   done: '已完成',

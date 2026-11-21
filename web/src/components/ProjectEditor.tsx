@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { api } from '../api/client'
-import type { InkColor, Project, ProjectInput, ScheduleType } from '../api/types'
+import type { InkColor, Project, ProjectInput, ProjectMode, ScheduleType } from '../api/types'
 import { useApp } from '../hooks/useApp'
 import { useSessionHeartbeat } from '../hooks/useHeartbeat'
 import { navigate } from '../hooks/useNow'
 import { localToday, weekdayName } from '../lib/date'
 import { describeError, fieldErrorsFrom } from '../lib/errors'
 import { AlertIcon, ChevronLeftIcon } from './icons'
-import { Button, ColorPicker, EmojiPicker, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
+import { Button, Chip, ColorPicker, EmojiPicker, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
 
 const SCHEDULE_OPTIONS: { value: ScheduleType; label: string }[] = [
   { value: 'daily', label: '每天' },
@@ -19,6 +19,11 @@ const SCHEDULE_OPTIONS: { value: ScheduleType; label: string }[] = [
 ]
 
 const UNIT_SUGGESTIONS = ['次', '杯', '分钟', '公里', '个', '页', '小时']
+
+const MODE_OPTIONS: { value: ProjectMode; label: string }[] = [
+  { value: 'check', label: '打勾一次' },
+  { value: 'value', label: '累计数量' },
+]
 
 /**
  * Create / edit a project. The schedule picker is the heart: six families,
@@ -37,6 +42,8 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   const [categoryId, setCategoryId] = useState(existing?.categoryId ?? '')
   const [isPrivate, setIsPrivate] = useState(existing?.private ?? false)
   const [schedule, setSchedule] = useState<ScheduleType>(existing?.schedule ?? 'daily')
+  const [mode, setMode] = useState<ProjectMode>(existing?.mode ?? 'check')
+  const [prerequisites, setPrerequisites] = useState<string[]>(existing?.prerequisites ?? [])
   const [target, setTarget] = useState(existing !== undefined && existing.target > 0 ? String(existing.target) : '1')
   const [unit, setUnit] = useState(existing?.unit ?? '次')
   const [weekdays, setWeekdays] = useState<number[]>(existing?.weekdays ?? [1, 3, 5])
@@ -71,7 +78,7 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
 
   const isIntervalHours = schedule === 'interval_hours'
   const isIntervalDays = schedule === 'interval_days'
-  const needsTarget = !isIntervalHours
+  const needsTarget = !isIntervalHours && mode === 'value'
   const needsWeekdays = schedule === 'weekdays'
 
   const validate = (): Record<string, string> => {
@@ -108,11 +115,13 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
       categoryId,
       private: isPrivate,
       schedule,
-      target: needsTarget ? Number(target) : 0,
+      mode,
+      target: needsTarget ? Number(target) : 1,
       unit: unit.trim() === '' ? '次' : unit.trim(),
       weekdays: needsWeekdays ? weekdays : [],
       interval: isIntervalHours || isIntervalDays ? Number(interval) : 0,
       startDate,
+      prerequisites,
     }
     try {
       if (existing === undefined) {
@@ -194,6 +203,30 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
 
         <Field label="打卡频率">
           <Segmented options={SCHEDULE_OPTIONS} value={schedule} onChange={setSchedule} ariaLabel="打卡频率" />
+        </Field>
+
+        <Field label="完成方式" hint={mode === 'check' ? '每天打一次勾即完成，「30 分钟」等写在说明里' : '累计数量达到目标才算完成'}>
+          <Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} ariaLabel="完成方式" />
+        </Field>
+
+        <Field label="前置条件（可选）" error={errors['prerequisites']} hint="选了的项目必须当天先完成，本项目才解锁；可多选、可链式，服务器会拒绝成环">
+          <div className="chip-row prereq-picker" role="group" aria-label="前置条件">
+            {projects
+              .filter((p) => p.id !== projectId)
+              .map((p) => (
+                <Chip
+                  key={p.id}
+                  active={prerequisites.includes(p.id)}
+                  onClick={() =>
+                    setPrerequisites((cur) =>
+                      cur.includes(p.id) ? cur.filter((x) => x !== p.id) : [...cur, p.id],
+                    )
+                  }
+                >
+                  <span aria-hidden="true">{p.icon}</span> {p.name}
+                </Chip>
+              ))}
+          </div>
         </Field>
 
         {needsWeekdays ? (

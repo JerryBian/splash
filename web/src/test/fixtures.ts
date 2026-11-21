@@ -18,6 +18,7 @@ export function makeStatus(overrides: Partial<ProjectStatus> = {}): ProjectStatu
     count: 0,
     streak: 0,
     bestStreak: 0,
+    unmet: [],
     ...overrides,
   }
 }
@@ -32,12 +33,14 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     categoryId: '',
     private: false,
     schedule: 'daily',
+    mode: 'check',
     target: 1,
     unit: '次',
     weekdays: [],
     interval: 0,
     startDate: '2026-11-01',
     archived: false,
+    prerequisites: [],
     createdAt: '2026-11-01T00:00:00Z',
     updatedAt: '2026-11-01T00:00:00Z',
     version: 1,
@@ -58,6 +61,8 @@ export function makeOverview(overrides: Partial<Overview> = {}): Overview {
     categories: [],
     leaders: [],
     trend: [],
+    violations: 0,
+    recentViolations: [],
     ...overrides,
   }
 }

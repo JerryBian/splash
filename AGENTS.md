@@ -16,10 +16,13 @@ are confined to UI surfaces: `web/src` UI strings and their tests, the demo
 seed data, the built-frontend placeholder page, and UI default values (the
 default unit and the uncategorized bucket label) with their assertions.
 
-The domain is real: categories, projects with six schedule families, check-ins
-(value + note + mood), skips, and a pure schedule engine that derives streaks,
-misses, heatmaps and trends on read. Two roles: anonymous visitors read public
-projects; one administrator (credentials from `SPLASH_ADMIN_*`) writes
+The domain is real: categories, projects with six schedule families and two
+completion modes (`check` = one tick, `value` = accumulate), check-ins (value +
+note + mood + a stored backfill flag), skips, a prerequisite graph (same-day
+gates, AND, cycle-free), and a pure schedule engine that derives streaks,
+misses, heatmaps, trends and prerequisite violations on read. Two roles:
+anonymous visitors read public projects; one administrator (credentials from
+`SPLASH_ADMIN_*`) writes
 everything and sees private projects.
 
 The Go module has **one third-party dependency**: `modernc.org/sqlite`, the
@@ -58,10 +61,13 @@ node scripts/build.mjs status             # what would be built, and what is emb
 node scripts/build.mjs clean
 ```
 
-Publishing is push-driven: every push to main runs `.github/workflows/release.yml`
-(verify gate → semver bump → two GitHub Releases (`vX.Y.Z` + moving `latest`) →
-multi-arch images to GHCR and optionally Docker Hub). `node scripts/build.mjs
-release` locally reproduces exactly the artifacts that workflow uploads.
+Publishing is push-driven: every push to master runs `.github/workflows/release.yml`
+(verify gate → semver bump → ONE immutable GitHub Release `vX.Y.Z` → multi-arch
+images to GHCR and optionally Docker Hub, the image keeping a moving `latest`
+tag while Releases do not → optional SSH deploy to a VPS running
+`bash /ga/script/deploy-splash.sh` when `VPS_SSH_*` secrets are set).
+`node scripts/build.mjs release` locally reproduces exactly the artifacts that
+workflow uploads.
 
 ```bash
 # --- test ---
@@ -236,9 +242,17 @@ on failure → api.fail → api.mapError → httpx.WriteError
   interval-hours countdown and history ordering use `checked_at`. A backfill
   sets `local_date` to the requested day and `checked_at` to noon UTC of it.
   Don't "fix" one to match the other.
-- **Statuses are derived, never stored.** There is no missed/skipped/streak
-  column. Everything comes from `BuildStats` on read, so a backfill or an undo
-  repairs history retroactively and no migration is needed for schedule rules.
+- **Statuses are derived, never stored.** There is no missed/skipped/streak/
+  violation column. Everything comes from `BuildStats` / `PrereqSatisfied` /
+  `enrichCheckins` on read, so a backfill or an undo repairs history
+  retroactively (including clearing a prerequisite violation) and no migration
+  is needed for schedule rules. The only stored provenance flag is
+  `checkins.backfilled` (was this recorded after its credited day).
+- **Prerequisite graph lives in `prerequisites(project_id, requires_id)`.**
+  Cycles and self/dangling edges are rejected in `Projects.checkPrereqGraph`
+  (full load + DFS, the graph is tiny). Anonymous DTOs strip private
+  prerequisite ids (`hidePrivatePrereqs`) so a public gate never leaks a
+  private project's existence.
 - **Default credentials warn at startup.** `config.UsingDefaultCredentials()`
   drives the warning; keep it wired if you touch main. The login limiter is
   in-memory per IP — a restart resets it, which is acceptable for one admin

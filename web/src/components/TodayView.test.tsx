@@ -59,7 +59,7 @@ describe('TodayView', () => {
   })
 
   it('opens the record sheet for measured goals instead of quick-checking', async () => {
-    const water = makeProject({ id: 'p-2', name: '喝水', icon: '💧', target: 8, unit: '杯' })
+    const water = makeProject({ id: 'p-2', name: '喝水', icon: '💧', mode: 'value', target: 8, unit: '杯' })
     stubFetch({
       '/api/v1/projects/p-2/checkins': { checkins: [] },
       '/api/v1/projects/p-2/skips': { skips: [] },
@@ -74,6 +74,41 @@ describe('TodayView', () => {
     await userEvent.click(screen.getByLabelText('为 喝水 打卡'))
     expect(await screen.findByRole('dialog', { name: '喝水' })).toBeInTheDocument()
     expect(screen.getByLabelText('数量（杯）')).toBeInTheDocument()
+  })
+
+  it('asks for confirmation before checking while a prerequisite is unmet', async () => {
+    const gated = makeProject({
+      id: 'p-3',
+      name: '刷短视频',
+      status: makeStatus({ unmet: ['p-1'] }),
+      prerequisites: ['p-1'],
+    })
+    const fetchMock = stubFetch({
+      '/api/v1/projects/p-3/checkins': {
+        method: 'POST',
+        status: 201,
+        body: { id: 'c9', projectId: 'p-3', value: 1, localDate: TEST_TODAY, checkedAt: '', tzOffset: 0, backfilled: false, violated: true, unmet: ['p-1'], createdAt: '' },
+      },
+      ...refreshRoutes([gated]),
+    })
+    render(
+      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [gated] })}>
+        <TodayView />
+      </AppProvider>,
+    )
+
+    // The card surfaces the closed gate.
+    expect(screen.getByText(/需先完成 1 个前置/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByLabelText('为 刷短视频 打卡'))
+    // No POST yet: a confirmation dialog must appear first.
+    expect(callTo(fetchMock, '/checkins', 'POST')).toBeUndefined()
+    expect(await screen.findByText('前置条件未满足')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByText('仍要打卡'))
+    await waitFor(() => {
+      expect(callTo(fetchMock, '/checkins', 'POST')).toBeDefined()
+    })
   })
 
   it('shows the anonymous banner and no stamp buttons for visitors', () => {

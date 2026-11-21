@@ -97,6 +97,17 @@ func (in CategoryInput) Normalized() CategoryInput {
 	}
 }
 
+// Completion modes, orthogonal to the schedule (period layout).
+//
+// ModeCheck means ONE tick completes the period: "read 30 minutes" is a
+// description of the obligation, not a quantity to accumulate — tick it or
+// leave an X. ModeValue accumulates check-in values toward Target (8 cups,
+// 15 km). Check mode forces Target to 1.
+const (
+	ModeCheck = "check"
+	ModeValue = "value"
+)
+
 // Project is one check-in habit: what to do, how often, and who may see it.
 type Project struct {
 	ID          uuid.UUID    `json:"id"`
@@ -107,14 +118,19 @@ type Project struct {
 	CategoryID  uuid.UUID    `json:"categoryId"` // uuid.Nil() means uncategorized
 	Private     bool         `json:"private"`    // hidden from anonymous visitors
 	Schedule    ScheduleType `json:"schedule"`
+	Mode        string       `json:"mode"`   // ModeCheck | ModeValue
 	Target      float64      `json:"target"` // units per period; unused by interval_hours
 	Unit        string       `json:"unit"`   // UI-facing: "times", "cups", "minutes", "km"…
 	Weekdays    []int        `json:"weekdays"`
 	Interval    float64      `json:"interval"` // hours or days, per Schedule
 	StartDate   string       `json:"startDate"`
 	Archived    bool         `json:"archived"`
-	CreatedAt   time.Time    `json:"createdAt"`
-	UpdatedAt   time.Time    `json:"updatedAt"`
+	// Prerequisites are projects that must be satisfied on the same day before
+	// this one counts as unlocked. All of them (AND), any depth of chain, no
+	// cycles. Violations are derived at read time, never stored.
+	Prerequisites []uuid.UUID `json:"prerequisites"`
+	CreatedAt     time.Time   `json:"createdAt"`
+	UpdatedAt     time.Time   `json:"updatedAt"`
 	// Version backs the ETag / If-Match optimistic concurrency on updates.
 	Version int `json:"version"`
 }
@@ -131,11 +147,14 @@ type ProjectInput struct {
 	CategoryID  string       `json:"categoryId"` // "" or a UUID
 	Private     bool         `json:"private"`
 	Schedule    ScheduleType `json:"schedule"`
+	Mode        string       `json:"mode"`
 	Target      float64      `json:"target"`
 	Unit        string       `json:"unit"`
 	Weekdays    []int        `json:"weekdays"`
 	Interval    float64      `json:"interval"`
 	StartDate   string       `json:"startDate"`
+	// Prerequisites lists project ids that gate this one (same-day, AND).
+	Prerequisites []string `json:"prerequisites"`
 }
 
 // Validate reports every problem with the input at once. today (YYYY-MM-DD)
@@ -147,8 +166,10 @@ func (in ProjectInput) Validate(today string) error {
 		validateIcon(in.Icon),
 		validateColor(in.Color),
 		validateCategoryID(in.CategoryID),
+		validateMode(in.Mode),
 		validateSchedule(in.Schedule, in.Target, in.Unit, in.Weekdays, in.Interval),
 		validateStartDate(in.StartDate, today),
+		validatePrerequisites(in.Prerequisites, uuid.Nil()),
 	}
 	return collect(problems)
 }
@@ -161,8 +182,14 @@ func (in ProjectInput) Normalized() ProjectInput {
 	out.Icon = orDefault(strings.TrimSpace(in.Icon), "✅")
 	out.Color = orDefault(strings.TrimSpace(in.Color), "blue")
 	out.CategoryID = strings.TrimSpace(in.CategoryID)
+	out.Mode = orDefault(strings.TrimSpace(in.Mode), ModeValue)
 	out.Unit = orDefault(strings.TrimSpace(in.Unit), "次")
 	out.StartDate = strings.TrimSpace(in.StartDate)
+	out.Prerequisites = normalizePrerequisites(in.Prerequisites)
+	if out.Mode == ModeCheck {
+		out.Target = 1
+		out.Unit = "次"
+	}
 	if out.Schedule == ScheduleWeekdays {
 		out.Weekdays = normalizeWeekdays(in.Weekdays)
 	} else {
@@ -187,19 +214,23 @@ type ProjectPatch struct {
 	CategoryID  *string       `json:"categoryId,omitempty"`
 	Private     *bool         `json:"private,omitempty"`
 	Schedule    *ScheduleType `json:"schedule,omitempty"`
+	Mode        *string       `json:"mode,omitempty"`
 	Target      *float64      `json:"target,omitempty"`
 	Unit        *string       `json:"unit,omitempty"`
 	Weekdays    *[]int        `json:"weekdays,omitempty"`
 	Interval    *float64      `json:"interval,omitempty"`
 	StartDate   *string       `json:"startDate,omitempty"`
 	Archived    *bool         `json:"archived,omitempty"`
+	// Prerequisites replaces the whole edge list; an empty slice clears it.
+	Prerequisites *[]string `json:"prerequisites,omitempty"`
 }
 
 // Empty reports whether the patch would change nothing.
 func (p ProjectPatch) Empty() bool {
 	return p.Name == nil && p.Description == nil && p.Icon == nil && p.Color == nil &&
-		p.CategoryID == nil && p.Private == nil && p.Schedule == nil && p.Target == nil &&
-		p.Unit == nil && p.Weekdays == nil && p.Interval == nil && p.StartDate == nil && p.Archived == nil
+		p.CategoryID == nil && p.Private == nil && p.Schedule == nil && p.Mode == nil && p.Target == nil &&
+		p.Unit == nil && p.Weekdays == nil && p.Interval == nil && p.StartDate == nil && p.Archived == nil &&
+		p.Prerequisites == nil
 }
 
 // Validate checks only the fields present in the patch, against the project it
@@ -228,11 +259,17 @@ func (p ProjectPatch) Validate(current Project, today string) error {
 	if p.CategoryID != nil {
 		problems = append(problems, validateCategoryID(*p.CategoryID))
 	}
-	if p.Schedule != nil || p.Target != nil || p.Unit != nil || p.Weekdays != nil || p.Interval != nil {
+	if p.Mode != nil {
+		problems = append(problems, validateMode(*p.Mode))
+	}
+	if p.Schedule != nil || p.Target != nil || p.Unit != nil || p.Weekdays != nil || p.Interval != nil || p.Mode != nil {
 		problems = append(problems, validateSchedule(merged.Schedule, merged.Target, merged.Unit, merged.Weekdays, merged.Interval))
 	}
 	if p.StartDate != nil {
 		problems = append(problems, validateStartDate(*p.StartDate, today))
+	}
+	if p.Prerequisites != nil {
+		problems = append(problems, validatePrerequisites(*p.Prerequisites, current.ID))
 	}
 	return collect(problems)
 }
@@ -284,7 +321,17 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 	if p.Archived != nil {
 		project.Archived = *p.Archived
 	}
-	// Keep the schedule invariants that Normalized enforces on create.
+	if p.Mode != nil {
+		project.Mode = orDefault(strings.TrimSpace(*p.Mode), ModeValue)
+	}
+	if p.Prerequisites != nil {
+		project.Prerequisites = parsePrerequisites(*p.Prerequisites)
+	}
+	// Keep the invariants that Normalized enforces on create.
+	if project.Mode == ModeCheck {
+		project.Target = 1
+		project.Unit = "次"
+	}
 	if project.Schedule != ScheduleWeekdays {
 		project.Weekdays = []int{}
 	}
@@ -294,6 +341,55 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 	if project.Schedule == ScheduleIntervalHours {
 		project.Target = 0
 	}
+}
+
+func validateMode(raw string) *FieldError {
+	m := strings.TrimSpace(raw)
+	if m != "" && m != ModeCheck && m != ModeValue {
+		return &FieldError{Field: "mode", Message: "must be one of check, value"}
+	}
+	return nil
+}
+
+// validatePrerequisites checks ids parse and none is the project itself.
+// Existence and cycle-freedom need the graph, so the store checks those.
+func validatePrerequisites(ids []string, self uuid.UUID) *FieldError {
+	for _, raw := range ids {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return &FieldError{Field: "prerequisites", Message: "must be a list of project UUIDs"}
+		}
+		if self != uuid.Nil() && id == self {
+			return &FieldError{Field: "prerequisites", Message: "must not include the project itself"}
+		}
+	}
+	return nil
+}
+
+func normalizePrerequisites(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, raw := range ids {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// parsePrerequisites converts validated id strings; invalid entries are
+// dropped because Validate ran first (a parse failure here is a caller bug).
+func parsePrerequisites(ids []string) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, raw := range normalizePrerequisites(ids) {
+		if id, err := uuid.Parse(raw); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Checkin is one completed (or partial) contribution to a project's period.
@@ -310,7 +406,16 @@ type Checkin struct {
 	LocalDate string    `json:"localDate"`
 	CheckedAt time.Time `json:"checkedAt"`
 	TZOffset  int       `json:"tzOffset"` // minutes east of UTC, as reported by the client
-	CreatedAt time.Time `json:"createdAt"`
+	// Backfilled marks a check-in recorded on a later calendar day than the
+	// day it credits ("I forgot to tick that day"). Derived verdicts about
+	// prerequisites (Violated/Unmet) are computed at read time, not stored.
+	Backfilled bool      `json:"backfilled"`
+	CreatedAt  time.Time `json:"createdAt"`
+	// Violated/Unmet are DERIVED at read time (never stored): a check-in whose
+	// project had unmet prerequisites on its credited day. Backfilling the
+	// prerequisite later clears the violation automatically.
+	Violated bool        `json:"violated"`
+	Unmet    []uuid.UUID `json:"unmet"`
 }
 
 // CheckinInput is the payload for recording a check-in. An empty Date means

@@ -202,6 +202,8 @@ type Summary struct {
 	BestStreak    int        `json:"bestStreak"`
 	DueAt         *time.Time `json:"dueAt,omitempty"`         // interval_hours
 	LastCheckinAt *time.Time `json:"lastCheckinAt,omitempty"` // interval_hours
+	// Unmet lists prerequisite project ids not resolved today (gate open?).
+	Unmet []string `json:"unmet"`
 }
 
 // Totals is the lifetime roll-up shown on the detail page.
@@ -215,6 +217,8 @@ type Totals struct {
 	CompletionRate float64 `json:"completionRate"` // done / (done + missed), 0 when nothing ended yet
 	OnTimeRate     float64 `json:"onTimeRate"`     // interval_hours only
 	LateCount      int     `json:"lateCount"`      // interval_hours only
+	Backfilled     int     `json:"backfilled"`     // check-ins recorded after their credited day
+	Violations     int     `json:"violations"`     // check-ins landed while a prerequisite was unmet
 }
 
 // HeatCell is one day of the calendar heatmap.
@@ -639,4 +643,36 @@ func rate(num, den int) float64 {
 		return 0
 	}
 	return float64(num) / float64(den)
+}
+
+// PrereqSatisfied reports whether project p counts as "resolved" on a given
+// day, for the purpose of gating a dependent project. Resolved means: done,
+// excused (skip), not scheduled (rest), or retired (archived). A pending or
+// partial day is NOT resolved, so checking the dependent project then is a
+// prerequisite violation. Pure: aggregates and skips are supplied by caller.
+func PrereqSatisfied(p Project, day string, agg map[string]DayAggregate, skips map[string]string) bool {
+	if p.Archived {
+		return true
+	}
+	if _, skipped := skips[day]; skipped {
+		return true
+	}
+	if !ScheduledOn(p, day) {
+		return true
+	}
+	if p.Schedule == ScheduleIntervalHours {
+		expected := int(math.Floor(24 / p.Interval))
+		if expected < 1 {
+			expected = 1
+		}
+		return agg[day].Count >= expected
+	}
+	per := PeriodFor(p, day)
+	from := maxDate(per.Start, p.StartDate)
+	to := minDate(per.End, day)
+	var value float64
+	for d := from; d <= to; d = AddDays(d, 1) {
+		value += agg[d].Value
+	}
+	return value >= p.Target
 }

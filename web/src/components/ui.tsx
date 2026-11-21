@@ -229,6 +229,21 @@ export function VisibilityBadge({ isPrivate }: { isPrivate: boolean }) {
   )
 }
 
+/**
+ * Per-record provenance badges: 补 = backfilled (recorded after the credited
+ * day), 违规 = landed while a prerequisite was unmet. Both are derived facts
+ * the user asked to see marked, so they ride on every record row.
+ */
+export function RecordBadges({ backfilled, violated }: { backfilled: boolean; violated: boolean }) {
+  if (!backfilled && !violated) return null
+  return (
+    <span className="record-badges">
+      {backfilled ? <span className="rec-badge" data-kind="backfill">补</span> : null}
+      {violated ? <span className="rec-badge" data-kind="violation">违规</span> : null}
+    </span>
+  )
+}
+
 /** The eight validated inks as pickable swatches. Names, not color alone. */
 export function ColorPicker({ value, onChange }: { value: InkColor; onChange: (color: InkColor) => void }) {
   return (

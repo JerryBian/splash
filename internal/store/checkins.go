@@ -25,13 +25,15 @@ type Checkins struct{ db *DB }
 
 var _ CheckinStore = (*Checkins)(nil)
 
-const checkinColumns = `id, project_id, value, note, mood, local_date, checked_at, tz_offset, created_at`
+const checkinColumns = `id, project_id, value, note, mood, local_date, checked_at, tz_offset, backfilled, created_at`
 
 // Create records a check-in. The project must exist; the date defaults to the
-// server's today and may be in the past (a backfill). A backfilled check-in is
-// timestamped at noon UTC of its date so history ordering stays sensible.
+// client's today (now + reported offset) and may be in the past (a backfill),
+// which is flagged so the UI can mark it. A backfilled check-in is timestamped
+// at noon UTC of its credited date so history ordering stays sensible.
 func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinInput) (Checkin, error) {
-	if _, err := s.db.Projects().Get(ctx, projectID); err != nil {
+	proj, err := s.db.Projects().Get(ctx, projectID)
+	if err != nil {
 		return Checkin{}, err
 	}
 	today := s.db.Today()
@@ -39,38 +41,52 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 		return Checkin{}, err
 	}
 	n := in.Normalized()
-	date := n.Date
-	if date == "" {
-		date = today
-	}
 
 	now := s.db.now().UTC().Truncate(time.Millisecond)
+	clientToday := DateKey(now.Add(time.Duration(n.TZOffset) * time.Minute))
+	date := n.Date
+	if date == "" {
+		date = clientToday
+	}
+	backfilled := date != clientToday
+
+	value := n.Value
+	if proj.Mode == ModeCheck {
+		value = 1 // one tick completes the period; quantity is meaningless
+	}
 	checkedAt := now
-	if date != today {
+	if backfilled {
 		if t, err := ParseDate(date); err == nil {
 			checkedAt = t.Add(12 * time.Hour)
 		}
 	}
 
 	c := Checkin{
-		ID:        uuid.NewV7(),
-		ProjectID: projectID,
-		Value:     n.Value,
-		Note:      n.Note,
-		Mood:      n.Mood,
-		LocalDate: date,
-		CheckedAt: checkedAt,
-		TZOffset:  n.TZOffset,
-		CreatedAt: now,
+		ID:         uuid.NewV7(),
+		ProjectID:  projectID,
+		Value:      value,
+		Note:       n.Note,
+		Mood:       n.Mood,
+		LocalDate:  date,
+		CheckedAt:  checkedAt,
+		TZOffset:   n.TZOffset,
+		Backfilled: backfilled,
+		CreatedAt:  now,
 	}
-	_, err := s.db.sql.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = s.db.sql.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.LocalDate,
-		toMillis(c.CheckedAt), c.TZOffset, toMillis(c.CreatedAt))
+		toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt))
 	if err != nil {
 		return Checkin{}, fmt.Errorf("create checkin: %w", err)
 	}
-	return c, nil
+	// Carry the derived prerequisite verdict on the create response too, so
+	// the UI can flag a violation immediately.
+	one := []Checkin{c}
+	if err := s.db.enrichCheckins(ctx, one); err != nil {
+		return Checkin{}, err
+	}
+	return one[0], nil
 }
 
 // Get returns one check-in, or ErrNotFound.
@@ -112,7 +128,13 @@ func (s *Checkins) List(ctx context.Context, q CheckinQuery) ([]Checkin, error) 
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.db.enrichCheckins(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Delete removes one check-in (undo).
@@ -182,13 +204,15 @@ func scanCheckin(row rowScanner) (Checkin, error) {
 	var c Checkin
 	var id, projectID string
 	var checkedAt, createdAt int64
+	var backfilled int
 	if err := row.Scan(&id, &projectID, &c.Value, &c.Note, &c.Mood, &c.LocalDate,
-		&checkedAt, &c.TZOffset, &createdAt); err != nil {
+		&checkedAt, &c.TZOffset, &backfilled, &createdAt); err != nil {
 		return Checkin{}, err
 	}
 	c.ID, _ = uuid.Parse(id)
 	c.ProjectID, _ = uuid.Parse(projectID)
 	c.CheckedAt = fromMillis(checkedAt)
+	c.Backfilled = backfilled != 0
 	c.CreatedAt = fromMillis(createdAt)
 	return c, nil
 }

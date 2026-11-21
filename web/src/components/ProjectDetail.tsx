@@ -12,11 +12,13 @@ import { dailyEquivalentTarget, STATUS_LABEL } from '../lib/schedule'
 import { CheckinSheet } from './CheckinSheet'
 import { Heatmap, TrendBars } from './charts'
 import {
+  AlertIcon,
   ArchiveIcon,
   CheckIcon,
   ChevronLeftIcon,
   ClockIcon,
   FlameIcon,
+  LockIcon,
   PencilIcon,
   PlusIcon,
   SkipIcon,
@@ -25,7 +27,7 @@ import {
   TrophyIcon,
 } from './icons'
 import { ConfirmDialog } from './overlays'
-import { Button, EmptyState, IconButton, StatTile, VisibilityBadge } from './ui'
+import { Button, EmptyState, IconButton, RecordBadges, StatTile, VisibilityBadge } from './ui'
 
 /**
  * The project page: identity, the four numbers that matter, the stamp
@@ -45,7 +47,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 }
 
 function DetailBody({ projectId }: { projectId: string }) {
-  const { categories, today, isAdmin, refresh, toast } = useApp()
+  const { projects, categories, today, isAdmin, refresh, toast } = useApp()
   const [version, setVersion] = useState(0)
   const [, startTransition] = useTransition()
   const [selectedDay, setSelectedDay] = useState<string | null>(null)
@@ -247,9 +249,56 @@ function DetailBody({ projectId }: { projectId: string }) {
           label="总打卡"
           value={stats.totals.checkins}
           icon={<CheckIcon size={14} />}
-          sub={`${stats.totals.activeDays} 个活跃日`}
+          sub={`${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
         />
       </section>
+
+      {project.prerequisites.length > 0 ? (
+        <section className="detail-section panel chart-panel" aria-label="前置条件">
+          <h2 className="section-head">
+            <LockIcon size={15} /> 前置条件
+            <span className="section-hint">同日全部满足才解锁</span>
+          </h2>
+          <ul className="prereq-list">
+            {project.prerequisites.map((id) => {
+              const prereq = projects.find((p) => p.id === id)
+              const unmet = summary.unmet.includes(id)
+              return (
+                <li key={id} data-unmet={unmet ? 'true' : undefined}>
+                  <span className="prereq-name">
+                    <span aria-hidden="true">{prereq?.icon ?? '❓'}</span> {prereq?.name ?? id}
+                  </span>
+                  <span className="prereq-state">{unmet ? '今日未满足' : '今日已满足'}</span>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="sheet-note">未满足前置时打卡会记一次违规；事后补卡前置可自动消除。</p>
+        </section>
+      ) : null}
+
+      {stats.totals.violations > 0 ? (
+        <section className="detail-section panel chart-panel" aria-label="前置违规">
+          <h2 className="section-head">
+            <AlertIcon size={15} /> 前置违规
+            <span className="section-hint">{stats.totals.violations} 次</span>
+          </h2>
+          <ul className="record-list">
+            {stats.recent
+              .filter((r) => r.violated)
+              .slice(0, 6)
+              .map((r) => (
+                <li key={r.id} className="record">
+                  <span className="record-value">{formatDayCN(r.localDate)}</span>
+                  <span className="record-meta">
+                    未满足：{r.unmet.map((id) => projects.find((p) => p.id === id)?.name ?? id).join('、')}
+                  </span>
+                  <RecordBadges backfilled={r.backfilled} violated={r.violated} />
+                </li>
+              ))}
+          </ul>
+        </section>
+      ) : null}
 
       <section className="detail-section detail-history panel chart-panel" aria-label="最近记录">
         <h2 className="section-head">
@@ -269,6 +318,7 @@ function DetailBody({ projectId }: { projectId: string }) {
                   {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                   {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
                 </span>
+                <RecordBadges backfilled={record.backfilled} violated={record.violated} />
                 {isAdmin ? (
                   <IconButton label="撤销这条记录" onClick={() => void removeRecent(record.id)}>
                     <TrashIcon size={15} />
@@ -410,6 +460,7 @@ function DayPanel({
                 {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                 {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
               </span>
+              <RecordBadges backfilled={record.backfilled} violated={record.violated} />
               {isAdmin ? (
                 <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>
                   <TrashIcon size={15} />

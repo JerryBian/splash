@@ -30,6 +30,16 @@ sheets. One DOM, the media query picks the shell.
 - **Six schedule families** — every day, chosen weekdays, N times per week,
   N times per month, every N days, every N hours (rolling countdown). Goals
   can be counts or measured quantities with a unit (8 cups, 30 minutes, 5 km).
+- **Two completion modes** — `check` (one tick completes the period: "read 30
+  minutes" is a description, tick it or leave an X) or `value` (accumulate
+  toward a target). Orthogonal to the schedule, so any period can be either.
+- **Backfill with a marker** — record a past day you forgot to tick; the record
+  carries a 补 badge and is counted separately in stats.
+- **Prerequisites (same-day gates)** — wire any project to require others first
+  ("read before short videos"), multi-select, chainable, cycle-free. Checking
+  while a gate is closed is allowed but flagged 违规; the verdict is *derived*,
+  so backfilling the prerequisite later clears the violation automatically.
+  Stats show a violation panel and per-project counts.
 - **Streaks & statistics** — current/best streak per project, completion rate,
   on-time rate for interval goals, a 26-week stamp calendar, period trend bars,
   and a cross-project dashboard (activity heatmap, weekly trend, category
@@ -360,7 +370,7 @@ the kind of thing only the race detector reliably catches.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request,
+`.github/workflows/ci.yml` runs on every push to `master` and every pull request,
 in three parallel jobs plus one build check:
 
 - **Go** — `gofmt -l`, `go vet`, `go test -race` with coverage, an informational
@@ -381,7 +391,7 @@ npm packages, GitHub Actions and Docker base images current.
 
 ## Releasing
 
-**Every push to `main` ships a version.** `.github/workflows/release.yml`:
+**Every push to `master` ships a version.** `.github/workflows/release.yml`:
 
 1. runs the full verify gate (gofmt, vet, `go test -race`, type-check, oxlint,
    Vitest) — a push that breaks tests publishes nothing
@@ -393,13 +403,17 @@ npm packages, GitHub Actions and Docker base images current.
    `CGO_ENABLED=0 -trimpath` — each archive holds ONE self-contained binary
    (embedded UI, pure-Go SQLite), plus `README.md`, `LICENSE`, `AGENTS.md`
 4. verifies `SHA256SUMS` and fails if any platform is missing
-5. publishes **two GitHub Releases**: the immutable `vX.Y.Z` and a moving
-   `latest` (previous `latest` release/tag replaced, so the "Latest" badge
-   always points at the newest build); both carry all six archives + checksums
+5. publishes **one immutable GitHub Release** per version (`vX.Y.Z`) carrying
+   all six archives + checksums. There is deliberately **no** separate moving
+   `latest` release/tag — GitHub badges the newest semver release as "Latest"
+   on its own
 6. builds `linux/amd64` + `linux/arm64` manifest lists and pushes them to
    **`ghcr.io/<owner>/splash`** and, when the Docker Hub secrets exist,
-   **`docker.io/<user>/splash`**, tagged `X.Y.Z`, `X.Y`, `X`, `sha-<commit>`,
-   `latest`
+   **`docker.io/<user>/splash`**, tagged `X.Y.Z`, `X.Y`, `X`, `sha-<commit>` and
+   a moving **`latest`** (the image keeps `latest`; the Release does not)
+7. when both release and docker succeed **and** the `VPS_SSH_*` secrets are
+   set, SSHes into the VPS and runs `bash /ga/script/deploy-splash.sh`;
+   without those secrets the deploy step is skipped
 
 Runs queue (`cancel-in-progress: false`), so rapid pushes each get their own
 version instead of cancelling one another. Build stages are pinned to
@@ -413,10 +427,14 @@ version instead of cancelling one another. Build stages are pinned to
 | `GHCR_TOKEN`         | optional | PAT with `write:packages`; overrides `GITHUB_TOKEN` for the GHCR login when the repository/package settings block it (see below) |
 | `DOCKERHUB_USERNAME` | optional | Docker Hub namespace; omit to publish to GHCR only   |
 | `DOCKERHUB_TOKEN`    | optional | Docker Hub access token (not the account password)   |
+| `VPS_SSH_HOST`       | optional | VPS hostname/IP; with `VPS_SSH_PASSWORD` enables the post-release SSH deploy |
+| `VPS_SSH_PORT`       | optional | SSH port (default 22)                               |
+| `VPS_SSH_USER`       | optional | SSH user                                            |
+| `VPS_SSH_PASSWORD`   | optional | SSH password; deploy runs `bash /ga/script/deploy-splash.sh` on the VPS |
 
 Nothing else to configure: no signing keys, no cloud credentials. The Docker
-Hub half is skipped cleanly when those two secrets are absent — the job
-publishes to GHCR and prints a notice instead of failing.
+Hub half and the VPS deploy are each skipped cleanly when their secrets are
+absent — the job publishes what it can and prints a notice instead of failing.
 
 ### Troubleshooting: GHCR push denied (`permission_denied: write_package`)
 
@@ -506,10 +524,12 @@ the single-binary archives from the Releases page instead.
   The corollary: never run a pool query inside an open transaction — the tx
   holds the only connection the pool could hand out (the demo seed creates its
   projects first, then opens the tx for the history bulk insert).
-- **Statuses are derived, never stored.** Streaks, misses and heatmaps are
-  computed from check-ins + skips + the schedule on every read
-  (`store.BuildStats`, a pure function). Nothing to backfill, no cron to drift,
-  and a backfilled check-in repairs a streak retroactively.
+- **Statuses are derived, never stored.** Streaks, misses, heatmaps AND
+  prerequisite violations are computed from check-ins + skips + the schedule +
+  the prerequisite graph on every read (`store.BuildStats` /
+  `store.PrereqSatisfied`, pure functions). Nothing to backfill, no cron to
+  drift; a backfilled check-in repairs a streak retroactively, and backfilling
+  a prerequisite clears the dependent project's violation for that day.
 - **The client's day is the day.** Every period computation uses the
   `local_date` the client sends (its own timezone), not the server's clock;
   `?date=` lets the UI look at yesterday. Instants (`checked_at`) drive only

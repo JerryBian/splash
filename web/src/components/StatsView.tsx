@@ -4,8 +4,8 @@ import { navigate } from '../hooks/useNow'
 import { formatDayCN, parseDay } from '../lib/date'
 import { formatValue } from '../lib/format'
 import { Donut, Heatmap, ProgressRing, Sparkline, TrendBars } from './charts'
-import { ChartIcon, CheckIcon, FlameIcon, LayersIcon, SealMark, TargetIcon, TrophyIcon } from './icons'
-import { EmptyState, StatTile } from './ui'
+import { AlertIcon, ChartIcon, CheckIcon, FlameIcon, LayersIcon, SealMark, TargetIcon, TrophyIcon } from './icons'
+import { EmptyState, RecordBadges, StatTile } from './ui'
 import type { HeatCell } from '../api/types'
 
 /**
@@ -16,7 +16,7 @@ import type { HeatCell } from '../api/types'
  * only the category donut uses entity inks, each with a labelled legend.
  */
 export function StatsView() {
-  const { overview, today, isAdmin } = useApp()
+  const { overview, today, isAdmin, projects } = useApp()
 
   // Memoized so chart props keep stable identities across renders, and all
   // hooks stay above the early return below.
@@ -192,6 +192,33 @@ export function StatsView() {
           </section>
         ) : null}
       </div>
+
+      {overview.violations > 0 ? (
+        <section className="detail-section panel chart-panel" aria-label="前置违规">
+          <h2 className="section-head">
+            <AlertIcon size={15} /> 前置违规
+            <span className="section-hint">{overview.violations} 次 · 没完成前置就打了卡</span>
+          </h2>
+          <ul className="record-list">
+            {overview.recentViolations.map((c) => {
+              const p = projects.find((x) => x.id === c.projectId)
+              return (
+                <li key={c.id} className="record">
+                  <span className="record-value">
+                    <span aria-hidden="true">{p?.icon}</span> {p?.name ?? c.projectId}
+                  </span>
+                  <span className="record-meta">
+                    {formatDayCN(c.localDate)} · 未满足：
+                    {c.unmet.map((id) => projects.find((x) => x.id === id)?.name ?? id).join('、')}
+                  </span>
+                  <RecordBadges backfilled={c.backfilled} violated={c.violated} />
+                </li>
+              )
+            })}
+          </ul>
+          <p className="sheet-note">补卡对应前置后，该违规会自动消除。</p>
+        </section>
+      ) : null}
 
       <p className="stats-foot">数值为 {formatValue(overview.totals.checkins)} 次打卡的累计 · 统计随每次打卡实时更新</p>
     </div>

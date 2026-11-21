@@ -29,7 +29,21 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 1
+const schemaVersion = 2
+
+// migration2 adds the completion mode, the backfill marker and the
+// prerequisite graph. Existing single-tick projects (target <= 1) become
+// check mode; their behaviour is unchanged, the label just becomes honest.
+const migration2SQL = `
+ALTER TABLE projects ADD COLUMN mode TEXT NOT NULL DEFAULT 'value';
+UPDATE projects SET mode = 'check' WHERE target <= 1;
+ALTER TABLE checkins ADD COLUMN backfilled INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS prerequisites (
+    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    requires_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    PRIMARY KEY (project_id, requires_id)
+);
+`
 
 // DB is the SQLite-backed store. One connection is deliberate: SQLite writes
 // serialize anyway, and a single connection removes SQLITE_BUSY entirely while
@@ -123,8 +137,15 @@ func (d *DB) migrate(ctx context.Context) error {
 	if version >= schemaVersion {
 		return nil
 	}
-	if _, err := d.sql.ExecContext(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("store: apply schema: %w", err)
+	if version < 1 {
+		if _, err := d.sql.ExecContext(ctx, schemaSQL); err != nil {
+			return fmt.Errorf("store: apply schema v1: %w", err)
+		}
+	}
+	if version < 2 {
+		if _, err := d.sql.ExecContext(ctx, migration2SQL); err != nil {
+			return fmt.Errorf("store: apply schema v2: %w", err)
+		}
 	}
 	if _, err := d.sql.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("store: stamp schema version: %w", err)

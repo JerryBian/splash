@@ -79,6 +79,10 @@ type OverviewStats struct {
 	Categories []CategoryCount `json:"categories"`
 	Leaders    []Leader        `json:"leaders"`
 	Trend      []WeekCount     `json:"trend"`
+	// Violations counts check-ins that landed while a prerequisite was unmet;
+	// RecentViolations lists the newest few (enriched with Unmet ids).
+	Violations       int       `json:"violations"`
+	RecentViolations []Checkin `json:"recentViolations"`
 }
 
 // ForProject computes one project's stats. weeks controls the heatmap length;
@@ -110,6 +114,25 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 		Checkins:   checkins,
 	})
 
+	// Derived prerequisite gate for today, plus backfill / violation counts.
+	unmetToday, err := s.db.UnmetByDay(ctx, p, []string{today})
+	if err != nil {
+		return ProjectStats{}, err
+	}
+	for _, id := range unmetToday[today] {
+		out.Summary.Unmet = append(out.Summary.Unmet, id.String())
+	}
+	if err := s.db.sql.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM checkins WHERE project_id = ? AND backfilled = 1`, p.ID.String(),
+	).Scan(&out.Totals.Backfilled); err != nil {
+		return ProjectStats{}, fmt.Errorf("count backfilled: %w", err)
+	}
+	violations, err := s.db.countViolations(ctx, p, agg)
+	if err != nil {
+		return ProjectStats{}, err
+	}
+	out.Totals.Violations = violations
+
 	recent, err := s.db.Checkins().List(ctx, CheckinQuery{ProjectID: p.ID, Limit: 30})
 	if err != nil {
 		return ProjectStats{}, err
@@ -127,11 +150,12 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 // visibility-filtered) projects.
 func (s *Stats) Overview(ctx context.Context, projects []Project, today string) (OverviewStats, error) {
 	out := OverviewStats{
-		Today:      TodayCounters{Date: today},
-		Activity:   []DayActivity{},
-		Categories: []CategoryCount{},
-		Leaders:    []Leader{},
-		Trend:      []WeekCount{},
+		Today:            TodayCounters{Date: today},
+		Activity:         []DayActivity{},
+		Categories:       []CategoryCount{},
+		Leaders:          []Leader{},
+		Trend:            []WeekCount{},
+		RecentViolations: []Checkin{},
 	}
 	out.Totals.ActiveProjects = len(projects)
 	if len(projects) == 0 {
@@ -171,10 +195,22 @@ func (s *Stats) Overview(ctx context.Context, projects []Project, today string) 
 			out.Today.Pending++
 		}
 		out.Totals.BestStreak = max(out.Totals.BestStreak, stats.Summary.BestStreak)
+		out.Violations += stats.Totals.Violations
+		for _, c := range stats.Recent {
+			if c.Violated {
+				out.RecentViolations = append(out.RecentViolations, c)
+			}
+		}
 		out.Leaders = append(out.Leaders, Leader{
 			ID: p.ID.String(), Name: p.Name, Icon: p.Icon, Color: p.Color,
 			Streak: stats.Summary.Streak, BestStreak: stats.Summary.BestStreak,
 		})
+	}
+	slices.SortFunc(out.RecentViolations, func(a, b Checkin) int {
+		return b.CheckedAt.Compare(a.CheckedAt)
+	})
+	if len(out.RecentViolations) > 8 {
+		out.RecentViolations = out.RecentViolations[:8]
 	}
 	slices.SortFunc(out.Leaders, func(a, b Leader) int {
 		if c := b.Streak - a.Streak; c != 0 {

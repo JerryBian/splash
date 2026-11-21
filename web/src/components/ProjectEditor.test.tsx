@@ -42,6 +42,7 @@ describe('ProjectEditor', () => {
 
     await userEvent.type(screen.getByLabelText('名称'), '晨跑')
     await userEvent.click(screen.getByText('每周'))
+    await userEvent.click(screen.getByText('累计数量'))
     await userEvent.clear(screen.getByLabelText('每周目标'))
     await userEvent.type(screen.getByLabelText('每周目标'), '3')
     await userEvent.click(screen.getByText('创建项目'))
@@ -49,7 +50,7 @@ describe('ProjectEditor', () => {
     await waitFor(() => {
       const post = callTo(fetchMock, '/projects', 'POST')
       expect(post).toBeDefined()
-      expect(post?.body).toMatchObject({ name: '晨跑', schedule: 'weekly', target: 3 })
+      expect(post?.body).toMatchObject({ name: '晨跑', schedule: 'weekly', mode: 'value', target: 3 })
     })
   })
 
@@ -72,7 +73,7 @@ describe('ProjectEditor', () => {
 
   it('loads an existing project into the form', () => {
     stubFetch(routes())
-    const existing = makeProject({ id: 'p-9', name: '阅读', target: 30, unit: '分钟', schedule: 'daily' })
+    const existing = makeProject({ id: 'p-9', name: '阅读', mode: 'value', target: 30, unit: '分钟', schedule: 'daily' })
     render(
       <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [existing] })}>
         <ProjectEditor projectId="p-9" />

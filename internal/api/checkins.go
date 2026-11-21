@@ -12,28 +12,38 @@ import (
 // checkin is the wire representation of one check-in.
 // web/src/api/types.ts mirrors this type. Change the two together.
 type checkin struct {
-	ID        string  `json:"id"`
-	ProjectID string  `json:"projectId"`
-	Value     float64 `json:"value"`
-	Note      string  `json:"note,omitempty"`
-	Mood      string  `json:"mood,omitempty"`
-	LocalDate string  `json:"localDate"`
-	CheckedAt string  `json:"checkedAt"`
-	TZOffset  int     `json:"tzOffset"`
-	CreatedAt string  `json:"createdAt"`
+	ID         string   `json:"id"`
+	ProjectID  string   `json:"projectId"`
+	Value      float64  `json:"value"`
+	Note       string   `json:"note,omitempty"`
+	Mood       string   `json:"mood,omitempty"`
+	LocalDate  string   `json:"localDate"`
+	CheckedAt  string   `json:"checkedAt"`
+	TZOffset   int      `json:"tzOffset"`
+	Backfilled bool     `json:"backfilled"`
+	Violated   bool     `json:"violated"`
+	Unmet      []string `json:"unmet"`
+	CreatedAt  string   `json:"createdAt"`
 }
 
 func toCheckin(c store.Checkin) checkin {
+	unmet := make([]string, 0, len(c.Unmet))
+	for _, id := range c.Unmet {
+		unmet = append(unmet, id.String())
+	}
 	return checkin{
-		ID:        c.ID.String(),
-		ProjectID: c.ProjectID.String(),
-		Value:     c.Value,
-		Note:      c.Note,
-		Mood:      c.Mood,
-		LocalDate: c.LocalDate,
-		CheckedAt: formatTime(c.CheckedAt),
-		TZOffset:  c.TZOffset,
-		CreatedAt: formatTime(c.CreatedAt),
+		ID:         c.ID.String(),
+		ProjectID:  c.ProjectID.String(),
+		Value:      c.Value,
+		Note:       c.Note,
+		Mood:       c.Mood,
+		LocalDate:  c.LocalDate,
+		CheckedAt:  formatTime(c.CheckedAt),
+		TZOffset:   c.TZOffset,
+		Backfilled: c.Backfilled,
+		Violated:   c.Violated,
+		Unmet:      unmet,
+		CreatedAt:  formatTime(c.CreatedAt),
 	}
 }
 

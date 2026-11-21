@@ -5,7 +5,7 @@ import { inkColorOf, splatter } from '../lib/confetti'
 import { formatCountdown } from '../lib/date'
 import { progressLabel, scheduleLabel } from '../lib/format'
 import { isComplete } from '../lib/schedule'
-import { CheckIcon, PlusIcon } from './icons'
+import { CheckIcon, LockIcon, PlusIcon } from './icons'
 import { ProgressRing } from './charts'
 import { VisibilityBadge } from './ui'
 
@@ -74,12 +74,18 @@ export function ProjectCard({
           </span>
           <span className="card-sub">
             {scheduleLabel(project)}
+            {project.mode === 'check' ? <span className="mini-chip">打勾</span> : null}
             {status !== undefined && status.streak > 0 ? (
               <span className="card-streak" title={`连续 ${status.streak} 个周期`}>
                 🔥{status.streak}
               </span>
             ) : null}
           </span>
+          {status !== undefined && status.unmet.length > 0 ? (
+            <span className="card-gate" title="前置项目今天还没完成">
+              <LockIcon size={11} /> 需先完成 {status.unmet.length} 个前置
+            </span>
+          ) : null}
           {isInterval ? (
             <span className="card-progress-text">
               {status?.status === 'due'

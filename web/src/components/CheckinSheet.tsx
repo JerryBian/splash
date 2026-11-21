@@ -9,8 +9,8 @@ import { formatClock, localToday } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatValue, progressLabel } from '../lib/format'
 import { CheckIcon, MinusIcon, PlusIcon, SkipIcon, TrashIcon } from './icons'
-import { Sheet } from './overlays'
-import { Button, Field, IconButton, Input } from './ui'
+import { ConfirmDialog, Sheet } from './overlays'
+import { Button, Field, IconButton, Input, RecordBadges } from './ui'
 
 const MOODS = ['😄', '🙂', '😐', '😪', '🔥'] as const
 
@@ -43,7 +43,9 @@ export function CheckinSheet({
   useSessionHeartbeat(true)
 
   const isInterval = project.schedule === 'interval_hours'
+  const isCheck = project.mode === 'check'
   const status = project.status
+  const [confirmGate, setConfirmGate] = useState(false)
 
   const reloadDay = () => {
     invalidate(`day:${project.id}:`)
@@ -52,19 +54,30 @@ export function CheckinSheet({
 
   const numericValue = Number(value)
   const valueValid = Number.isFinite(numericValue) && numericValue > 0
+  const gateUnmet = date === today && status !== undefined && status.unmet.length > 0
 
   const submit = async () => {
-    if (!valueValid || busy) return
+    if ((!isCheck && !isInterval && !valueValid) || busy) return
+    // Checking while a prerequisite is unmet is allowed but flagged; make the
+    // user acknowledge it once so the violation is intentional, not accidental.
+    if (gateUnmet && !confirmGate) {
+      setConfirmGate(true)
+      return
+    }
+    setConfirmGate(false)
     setBusy(true)
     try {
-      await api.createCheckin(project.id, {
-        value: isInterval ? 1 : numericValue,
+      const created = await api.createCheckin(project.id, {
+        value: isInterval || isCheck ? 1 : numericValue,
         note: note.trim(),
         mood,
         date,
         tzOffset: -new Date().getTimezoneOffset(),
       })
-      toast(`已为「${project.name}」打卡`, 'ok')
+      toast(
+        created.violated ? `已打卡「${project.name}」，但记了一次前置违规` : `已为「${project.name}」打卡`,
+        created.violated ? 'error' : 'ok',
+      )
       setNote('')
       setMood('')
       setValue('1')
@@ -81,6 +94,7 @@ export function CheckinSheet({
     status !== undefined && status.target > 0 ? Math.max(0, status.target - status.value) : 0
 
   return (
+    <>
     <Sheet
       open
       onClose={onClose}
@@ -93,9 +107,13 @@ export function CheckinSheet({
         </span>
       }
       footer={
-        <Button pending={busy} disabled={!isInterval && !valueValid} onClick={() => void submit()}>
+        <Button
+          pending={busy}
+          disabled={!isInterval && !isCheck && !valueValid}
+          onClick={() => void submit()}
+        >
           <CheckIcon size={16} strokeWidth={2.4} />
-          {isInterval ? '打卡' : `记录 ${valueValid ? formatValue(numericValue) : '—'} ${project.unit}`}
+          {isInterval || isCheck ? '打卡' : `记录 ${valueValid ? formatValue(numericValue) : '—'} ${project.unit}`}
         </Button>
       }
     >
@@ -111,7 +129,11 @@ export function CheckinSheet({
           />
         </Field>
 
-        {!isInterval ? (
+        {isCheck ? (
+          <p className="sheet-note">打勾型项目：每天打一次勾即完成，无需填数量。</p>
+        ) : null}
+
+        {!isInterval && !isCheck ? (
           <Field label={`数量（${project.unit}）`} htmlFor="checkin-value">
             <div className="stepper">
               <IconButton
@@ -197,6 +219,15 @@ export function CheckinSheet({
         </Suspense>
       </div>
     </Sheet>
+    <ConfirmDialog
+      open={confirmGate}
+      title="前置条件未满足"
+      message={`今天还有 ${status?.unmet.length ?? 0} 个前置项目没完成。现在打卡会被标记为一次前置违规；之后补卡前置可自动消除。仍要打卡吗？`}
+      confirmLabel="仍要打卡"
+      onConfirm={() => void submit()}
+      onClose={() => setConfirmGate(false)}
+    />
+    </>
   )
 }
 
@@ -276,6 +307,7 @@ function DayRecords({
                 {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                 {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
               </span>
+              <RecordBadges backfilled={record.backfilled} violated={record.violated} />
               <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>
                 <TrashIcon size={15} />
               </IconButton>
