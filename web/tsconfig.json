@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    /* TypeScript 7 runs the native (Go) compiler; `tsc --noEmit` is the
+       typecheck step and Vite does the actual transpiling. */
+    "target": "ESNext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+
+    /* Strictness. These are all on because turning one on later means fixing
+       every existing violation at once. */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+
+    /* Only type syntax that can be erased. This forbids enums, namespaces and
+       constructor parameter properties, which matters because the Vite
+       transform strips types without reading them — anything that needs
+       type information to emit correctly would silently misbehave. */
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["vite/client"]
+  },
+  "include": ["src", "vite.config.ts", "vitest.setup.ts"]
+}

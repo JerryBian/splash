@@ -1,0 +1,3 @@
+# This file exists so that `go:embed all:dist` has something to embed on a fresh
+# clone. `node scripts/build.mjs` (or `make build`) copies the Vite output here
+# and preserves this file. It is the only thing in the directory that git tracks.

@@ -1,0 +1,63 @@
+# golangci-lint configuration (v2 format).
+#
+# The linter is not wired into CI, which runs `gofmt -l`, `go vet` and the test
+# suite instead — that keeps a fresh clone green with nothing but the Go
+# toolchain installed. This file exists so that anyone who wants the extra
+# signal can run it the same way everyone else does:
+#
+#	go tool golangci-lint run
+#
+# (after `go get -tool github.com/golangci/golangci-lint/v2/cmd/golangci-lint`,
+# which records it in go.mod's tool directive rather than in a global install).
+
+version: "2"
+
+run:
+  # Tests are part of the codebase and get the same treatment.
+  tests: true
+  timeout: 5m
+
+linters:
+  # Start from nothing and opt in, so a linter upgrade cannot silently turn on a
+  # new opinion and fail CI on code that was already reviewed.
+  default: none
+  enable:
+    - errcheck       # an unchecked error is almost always a bug
+    - govet          # what CI already runs
+    - ineffassign    # a value assigned and never read
+    - staticcheck    # the main event: bugs and questionable constructs
+    - unused         # dead code
+    - misspell       # comments are documentation
+    - unconvert      # redundant conversions
+    - gofmt
+    - goimports
+  settings:
+    errcheck:
+      # Deliberately unchecked: writing to an http.ResponseWriter whose client
+      # has hung up, and closing a body that is already drained.
+      exclude-functions:
+        - (*net/http.ResponseWriter).Write
+        - (net/http.ResponseWriter).Write
+        - (*bytes.Buffer).Write
+        - (io.Closer).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    staticcheck:
+      # ST1000 (package comments) and ST1003 (naming) are style preferences the
+      # project already handles by review; the rest are kept.
+      checks:
+        - all
+        - '-ST1000'
+        - '-ST1003'
+    misspell:
+      locale: US
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -1,0 +1,30 @@
+# One place to decide what a diff looks like, so editors stop fighting each
+# other and reviews stop containing whitespace churn.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Go is formatted by gofmt, which uses tabs and is not configurable. Matching it
+# here stops an editor from reindenting a file gofmt already got right.
+[*.go]
+indent_style = tab
+indent_size = 4
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+# Two spaces at the end of a line are a Markdown line break, not trailing junk.
+trim_trailing_whitespace = false
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.json]
+indent_size = 2

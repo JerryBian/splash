@@ -1,0 +1,55 @@
+# Build context for `docker build`. Everything here is either reproducible from
+# a clean checkout or would actively corrupt the image.
+
+# Version control and CI configuration are not build inputs.
+.git
+.gitignore
+.gitattributes
+.github
+
+# Local build output. The image builds its own binaries.
+bin/
+dist/
+coverage/
+*.out
+*.test
+
+# Frontend dependencies and build output are produced inside the image by the
+# `web` stage; copying them in would defeat the layer cache and risk mixing a
+# host-built bundle (wrong platform, stale) into the image.
+web/node_modules
+web/dist
+web/coverage
+
+# The embedded frontend must come from the image's own `web` stage. If a stale
+# local build were copied in, `COPY --from=web` would merge into it rather than
+# replace it, and files from an older bundle would survive into the image.
+# .gitkeep stays because //go:embed all:dist needs the directory to exist.
+internal/web/dist/*
+!internal/web/dist/.gitkeep
+
+# Local configuration and secrets must never reach an image layer.
+.env
+.env.*
+!.env.example
+
+# Personal habit data is runtime state, never a build input.
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Editor and OS noise.
+.vscode
+.idea
+*.swp
+.DS_Store
+Thumbs.db
+
+# Documentation is not needed to compile. README and LICENSE are added back by
+# the release archives, not by the image.
+*.md
+LICENSE
+Makefile
+.golangci.yml
+.editorconfig

@@ -1,0 +1,321 @@
+name: Release
+
+# Every push to master produces a new version: a semver release (vX.Y.Z) plus a
+# moving `latest` release, both carrying the six single-binary archives, and
+# multi-arch container images pushed to GHCR and (when configured) Docker Hub.
+# Pushing a v* tag publishes exactly that version instead of bumping.
+#
+# Versioning is semver, the industry default: patch bumps on every push,
+# [minor] / [major] in the head commit message bump those components, and
+# workflow_dispatch can pin an exact version. First ever release is v0.1.0.
+#
+# The verify gate runs the same six checks as ci.yml, so a push that breaks
+# tests never publishes anything.
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the v prefix; leave empty to auto-increment'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Queue, never cancel: every push must get its own version, and queued runs
+# see the tags created by the run before them.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.27.4'
+  NODE_VERSION: '26'
+
+jobs:
+  verify:
+    name: Verify (unit tests + lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm -C web install --frozen-lockfile
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::run 'gofmt -w .' on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Go unit tests (race detector)
+        run: go test -race ./...
+
+      - name: Frontend type-check
+        run: pnpm -C web run typecheck
+
+      - name: Frontend lint
+        run: pnpm -C web run lint
+
+      - name: Frontend unit tests
+        run: pnpm -C web test
+
+  version:
+    name: Compute the next version
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      major: ${{ steps.v.outputs.major }}
+      minor: ${{ steps.v.outputs.minor }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve semver
+        id: v
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            git fetch --tags --force --quiet
+            latest="$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n1)"
+            if [ -z "$latest" ]; then
+              version="0.1.0"
+            else
+              IFS='.' read -r ma mi pa <<< "$latest"
+              msg="$(git log -1 --pretty=%B)"
+              case "$msg" in
+                *'[major]'*) ma=$((ma + 1)); mi=0; pa=0 ;;
+                *'[minor]'*) mi=$((mi + 1)); pa=0 ;;
+                *)           pa=$((pa + 1)) ;;
+              esac
+              version="$ma.$mi.$pa"
+            fi
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::not a semver version: $version"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "major=${version%%.*}"
+            rest="${version#*.}"
+            echo "minor=${rest%%.*}"
+          } >> "$GITHUB_OUTPUT"
+          echo "publishing v$version"
+
+  release:
+    name: Build binaries + publish two releases
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # One static binary per OS/arch: frontend embedded, pure-Go SQLite,
+      # CGO off. Nothing for the user to install besides the file itself.
+      - name: Cross-compile every platform + archives + checksums
+        env:
+          SPLASH_VERSION: v${{ needs.version.outputs.version }}
+        run: node scripts/build.mjs release
+
+      - name: Verify checksums
+        run: |
+          cd dist
+          sha256sum --check --strict SHA256SUMS
+
+      - name: Tag and publish the semver release and the moving latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: v${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            git tag -a "$VERSION" -m "splash $VERSION"
+            git push origin "$VERSION"
+          fi
+
+          notes=$(cat <<EOF
+          splash $VERSION — commit ${GITHUB_SHA:0:7}
+
+          Each archive contains ONE self-contained executable: the web UI is
+          embedded and SQLite is pure Go, so there is no runtime or dependency
+          to install. Unpack and run:
+
+              ./splash            # Linux / macOS
+              splash.exe          # Windows
+
+          Default account admin / splash123; pass -seed on first run to load
+          demo data. For production set SPLASH_ADMIN_PASSWORD and
+          SPLASH_AUTH_SECRET. The user-facing UI is Chinese; everything else
+          (docs, API, logs) is English.
+
+          Container images (linux/amd64 + linux/arm64):
+          ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION
+          EOF
+          )
+
+          # The semver release is immutable history; --latest=false keeps the
+          # "Latest" badge on the moving `latest` release created below.
+          gh release create "$VERSION" \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "splash $VERSION" --notes "$notes" --latest=false
+
+          # Moving target: replace the previous `latest` release and tag so
+          # there is exactly one `latest` release, always the newest build.
+          gh release delete latest --yes --cleanup-tag || true
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin latest
+          gh release create latest \
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+            --title "latest (newest build $VERSION)" --notes "$notes"
+
+  docker:
+    name: Container images (GHCR + Docker Hub, multi-arch)
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # GITHUB_TOKEN with packages:write is the zero-config path. If the
+      # repository's Actions workflow permissions are read-only, or the
+      # package's Actions access list does not grant this repo write, GHCR
+      # answers "denied: permission_denied: write_package"; a personal access
+      # token with write:packages in the GHCR_TOKEN secret bypasses both.
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || github.token }}
+
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          MAJOR: ${{ needs.version.outputs.major }}
+          MINOR: ${{ needs.version.outputs.minor }}
+        run: |
+          set -euo pipefail
+          ghcr="ghcr.io/${GITHUB_REPOSITORY,,}"
+          short="${GITHUB_SHA:0:7}"
+          suffixes="$VERSION $MAJOR.$MINOR $MAJOR latest sha-$short"
+          ghcr_tags=""
+          hub_tags=""
+          for s in $suffixes; do
+            ghcr_tags="$ghcr_tags,$ghcr:$s"
+            if [ -n "$DOCKERHUB_USERNAME" ]; then
+              hub_tags="$hub_tags,docker.io/$DOCKERHUB_USERNAME/splash:$s"
+            fi
+          done
+          echo "ghcr=${ghcr_tags#,}" >> "$GITHUB_OUTPUT"
+          echo "hub=${hub_tags#,}" >> "$GITHUB_OUTPUT"
+
+      # One manifest list per registry covering linux/amd64 and linux/arm64;
+      # the six desktop/server binaries in the releases cover the other
+      # OS/arch combinations (containers only make sense on Linux).
+      - name: Build and push to GHCR
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.ghcr }}
+          build-args: |
+            VERSION=v${{ needs.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Guidance if a registry push was denied
+        if: failure()
+        run: |
+          echo "::notice::If a push was denied (permission_denied: write_package), see README section 'Troubleshooting: GHCR push denied': repository workflow permissions, package Manage Actions access, or set the GHCR_TOKEN secret. Then use Re-run failed jobs."
+
+      - name: Build and push to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.hub }}
+          build-args: |
+            VERSION=v${{ needs.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ github.event.head_commit.timestamp }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Notice when Docker Hub is not configured
+        if: env.DOCKERHUB_USERNAME == ''
+        run: |
+          echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set — images published to GHCR only."

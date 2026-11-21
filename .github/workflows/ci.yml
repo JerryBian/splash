@@ -1,0 +1,247 @@
+name: CI
+
+# Runs on every push to master and on every pull request, so a branch is either
+# green or visibly not. `workflow_dispatch` is there for re-running a flake
+# without pushing an empty commit.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# The least privilege that still works. Release jobs escalate separately, in
+# release.yml, so a compromised CI run cannot write to the repository.
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the run in flight. Waiting for a
+# superseded commit to finish is wasted minutes and a confusing red X.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to a patch release rather than "1.27" so a surprise minor release
+  # cannot change what CI verifies. Dependabot keeps these current.
+  GO_VERSION: '1.27.4'
+  NODE_VERSION: '26'
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # gofmt is not a style preference here: an unformatted file means a
+      # contributor's editor is fighting the repo, and it shows up in every
+      # future diff.
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::run 'gofmt -w .' on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      # -race is the point of running tests on Linux: the detector needs cgo,
+      # which is available here and not on a stock Windows dev machine.
+      - name: Test
+        run: |
+          mkdir -p coverage
+          go test -race -covermode=atomic -coverprofile=coverage/go.out ./...
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage/go.out | tail -1
+
+      # Informational, not a gate: a newly disclosed CVE in a dependency
+      # should surface as a warning to act on, not block an unrelated push.
+      - name: Vulnerability scan (informational)
+        continue-on-error: true
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      # Builds without the frontend present, which is what a fresh clone does.
+      # If this step ever fails, the .gitkeep in internal/web/dist is missing
+      # and `go:embed` has nothing to embed.
+      - name: Build (frontend not embedded)
+        run: go build -trimpath -o /tmp/splash-no-web ./cmd/server
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: go-coverage
+          path: coverage/go.out
+          retention-days: 14
+          if-no-files-found: error
+
+  web:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Reads the packageManager field so the pnpm version here and on a
+      # contributor's machine cannot drift. The manifest lives in web/, not at
+      # the repository root, so it has to be named explicitly.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm -C web install --frozen-lockfile
+
+      - name: Type-check
+        run: pnpm -C web run typecheck
+
+      - name: Lint
+        run: pnpm -C web run lint
+
+      - name: Test
+        run: pnpm -C web run test:coverage
+
+      # Runs the same script the release pipeline uses, so the artifact handed
+      # to the next job is produced by code that is itself under test.
+      - name: Build and stage for embedding
+        env:
+          SPLASH_INSTALL: 'false'
+        run: node scripts/build.mjs web
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: internal/web/dist
+          retention-days: 1
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: web-coverage
+          path: web/coverage
+          retention-days: 14
+          if-no-files-found: warn
+
+  # Proves on every pull request that the release artifact actually works:
+  # frontend built, embedded into the binary, binary started, endpoints probed.
+  binary:
+    name: Embedded binary
+    runs-on: ubuntu-latest
+    needs: [go, web]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: internal/web/dist
+
+      - name: Build the release-shaped binary
+        env:
+          SPLASH_INSTALL: 'false'
+        run: node scripts/build.mjs binary
+
+      # A smoke test, not a formality: this is the step that catches "the build
+      # succeeded but the binary serves a placeholder page", which is otherwise
+      # invisible until someone deploys.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./bin/splash -version
+
+          SPLASH_HTTP_ADDR=127.0.0.1:8099 ./bin/splash &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+
+          base=http://127.0.0.1:8099
+          for _ in $(seq 1 50); do
+            curl -fsS "$base/api/v1/health" >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+
+          echo "--- health ---"
+          curl -fsS "$base/api/v1/health"; echo
+          echo "--- readiness ---"
+          curl -fsS "$base/api/v1/health/ready"; echo
+
+          echo "--- embedded frontend ---"
+          curl -fsS "$base/" | grep -q 'id="root"' \
+            || { echo "the SPA is not embedded in the binary"; exit 1; }
+
+          echo "--- anonymous writes are refused ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/v1/projects" \
+            -H 'Content-Type: application/json' -d '{"name":"nope"}')
+          test "$code" = "401" || { echo "expected 401 for anonymous write, got $code"; exit 1; }
+
+          echo "--- login, write and read back ---"
+          curl -fsS -X POST "$base/api/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"splash123"}' \
+            -c /tmp/splash-cookies | grep -q '"role":"admin"'
+          id=$(curl -fsS -X POST "$base/api/v1/projects" -b /tmp/splash-cookies \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"ci smoke\",\"schedule\":\"daily\",\"target\":1,\"startDate\":\"$(date -u +%F)\"}" \
+            | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+          test -n "$id" || { echo "no id in the create response"; exit 1; }
+          curl -fsS "$base/api/v1/projects/$id" -b /tmp/splash-cookies | grep -q 'ci smoke'
+
+          echo "--- check in and read the stats ---"
+          curl -fsS -X POST "$base/api/v1/projects/$id/checkins" -b /tmp/splash-cookies \
+            -H 'Content-Type: application/json' -d '{"value":1}' | grep -q '"value":1'
+          curl -fsS "$base/api/v1/projects/$id/stats" -b /tmp/splash-cookies | grep -q '"status":"done"'
+
+          echo "--- anonymous sees the public project ---"
+          curl -fsS "$base/api/v1/projects" | grep -q 'ci smoke'
+
+          echo "--- errors are JSON, not HTML ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/v1/does-not-exist")
+          test "$code" = "404" || { echo "expected 404, got $code"; exit 1; }
+          curl -s "$base/api/v1/does-not-exist" | grep -q '"code":"not_found"'
+
+          echo "smoke test passed"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: splash-linux-amd64
+          path: bin/splash
+          retention-days: 7
+          if-no-files-found: error
+
+  # Builds the runtime image on every pull request, for one architecture and
+  # without pushing. A broken Dockerfile should fail here, not on the day of a
+  # release. Multi-arch builds happen in release.yml.
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            VERSION=ci-${{ github.sha }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,65 @@
+# --- Go ---
+# Compiled binaries. scripts/build.mjs writes here.
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage output.
+*.test
+*.out
+/coverage/
+/web/coverage/
+coverage.txt
+
+# Go workspace file, which is a local convenience and never shared.
+go.work
+go.work.sum
+
+# --- Frontend build output ---
+# Vite writes here; scripts/build.mjs copies it into internal/web/dist.
+/web/dist/
+
+# The embedded copy is generated at build time. Everything in it is ignored
+# except the placeholder that keeps `go:embed all:dist` working on a fresh
+# clone — without it, `go build` fails before the frontend has been built once.
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
+
+# --- Node ---
+node_modules/
+.pnpm-store/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Editors and OS ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Local environment ---
+# Real secrets belong in a secret manager, never in the repository.
+.env
+.env.*
+!.env.example
+
+# --- Local data ---
+# The SQLite database and its WAL/SHM sidecars are runtime state, never source.
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

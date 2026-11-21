@@ -1,0 +1,283 @@
+/**
+ * Wire types for the splash API.
+ *
+ * These mirror the Go structs in internal/api. They are maintained by hand:
+ * the two sides are close enough that a generator would cost more than it
+ * saves, but that also means a change to a Go response struct must be made
+ * here too. `pnpm test` and the Go tests together catch most drift.
+ */
+
+/** The two access roles. Mirrors internal/auth. */
+export type Role = 'admin' | 'anonymous'
+
+export type Session = {
+  role: Role
+  /** Present only for the administrator. */
+  username?: string
+}
+
+/**
+ * The closed ink palette. Stored as token names so light and dark themes can
+ * render different steps of the same hue. The order is the validated picker
+ * order (adjacent inks stay distinguishable under CVD); every colored mark in
+ * the UI also carries an icon or a name, never color alone.
+ */
+export type InkColor = 'red' | 'blue' | 'green' | 'purple' | 'pink' | 'orange' | 'teal' | 'yellow'
+
+export const INK_COLORS: readonly InkColor[] = [
+  'red', 'blue', 'green', 'purple', 'pink', 'orange', 'teal', 'yellow',
+]
+
+/** How a project's periods are laid out. Mirrors store.ScheduleType. */
+export type ScheduleType =
+  | 'daily'
+  | 'weekdays'
+  | 'weekly'
+  | 'monthly'
+  | 'interval_days'
+  | 'interval_hours'
+
+/** Day/period verdicts. Mirrors the Status* constants in store/schedule.go. */
+export type DayStatus =
+  | 'done'
+  | 'partial'
+  | 'pending'
+  | 'missed'
+  | 'skipped'
+  | 'rest'
+  | 'due'
+  | 'waiting'
+  | 'none'
+
+export type Category = {
+  id: string
+  name: string
+  icon: string
+  color: InkColor
+  createdAt: string
+}
+
+/** The project's state right now, computed server-side for the client's day. */
+export type ProjectStatus = {
+  status: DayStatus
+  periodStart: string
+  periodEnd: string
+  /** Progress in the current period, in the project's unit. */
+  value: number
+  /** 0 for interval_hours, which has no period target. */
+  target: number
+  todayValue: number
+  /** Check-ins in the current period. */
+  count: number
+  streak: number
+  bestStreak: number
+  /** RFC 3339; interval_hours only. */
+  dueAt?: string
+  lastCheckinAt?: string
+}
+
+export type Project = {
+  id: string
+  name: string
+  description?: string
+  icon: string
+  color: InkColor
+  /** "" when uncategorized. */
+  categoryId: string
+  /** Hidden from anonymous visitors. */
+  private: boolean
+  schedule: ScheduleType
+  target: number
+  unit: string
+  /** 1 (Monday) .. 7 (Sunday); only for the weekdays schedule. */
+  weekdays: number[]
+  /** Hours or days, per schedule. */
+  interval: number
+  startDate: string
+  archived: boolean
+  createdAt: string
+  updatedAt: string
+  /** Revision counter; sent back as If-Match to detect lost updates. */
+  version: number
+  /** Present on listings and single reads, absent on write responses. */
+  status?: ProjectStatus
+}
+
+export type Checkin = {
+  id: string
+  projectId: string
+  value: number
+  note?: string
+  mood?: string
+  /** The client's calendar day, YYYY-MM-DD. */
+  localDate: string
+  checkedAt: string
+  tzOffset: number
+  createdAt: string
+}
+
+export type Skip = {
+  id: string
+  projectId: string
+  date: string
+  reason?: string
+  createdAt: string
+}
+
+export type HeatCell = {
+  date: string
+  value: number
+  count: number
+  status: DayStatus
+}
+
+export type PeriodBar = {
+  key: string
+  start: string
+  end: string
+  value: number
+  target: number
+  status: DayStatus
+}
+
+export type Totals = {
+  checkins: number
+  value: number
+  activeDays: number
+  done: number
+  missed: number
+  skipped: number
+  completionRate: number
+  onTimeRate: number
+  lateCount: number
+}
+
+export type ProjectStats = {
+  project: Project
+  summary: ProjectStatus
+  totals: Totals
+  heatmap: HeatCell[]
+  periods: PeriodBar[]
+  recent: Checkin[]
+  skips: Skip[]
+}
+
+export type Overview = {
+  today: { date: string; total: number; done: number; pending: number; skipped: number; due: number }
+  totals: { checkins: number; activeProjects: number; bestStreak: number; monthCheckins: number }
+  /** Last 56 days, oldest first. */
+  activity: { date: string; count: number; value: number }[]
+  categories: { id: string; name: string; icon: string; color: InkColor; count: number }[]
+  leaders: { id: string; name: string; icon: string; color: InkColor; streak: number; bestStreak: number }[]
+  trend: { weekStart: string; count: number }[]
+}
+
+export type ProjectInput = {
+  name: string
+  description?: string
+  icon?: string
+  color?: InkColor
+  categoryId?: string
+  private?: boolean
+  schedule: ScheduleType
+  target?: number
+  unit?: string
+  weekdays?: number[]
+  interval?: number
+  startDate: string
+}
+
+/** A partial update; an omitted field means "leave it alone". */
+export type ProjectPatch = {
+  name?: string
+  description?: string
+  icon?: string
+  color?: InkColor
+  /** "" clears the category. */
+  categoryId?: string
+  private?: boolean
+  schedule?: ScheduleType
+  target?: number
+  unit?: string
+  weekdays?: number[]
+  interval?: number
+  startDate?: string
+  archived?: boolean
+}
+
+export type CheckinInput = {
+  value: number
+  note?: string
+  mood?: string
+  /** Empty = today; a past date is a backfill (补卡). */
+  date?: string
+  tzOffset?: number
+}
+
+export type CategoryInput = {
+  name: string
+  icon?: string
+  color?: InkColor
+}
+
+export type ListProjectsParams = {
+  date?: string
+  archived?: boolean
+  category?: string
+  q?: string
+}
+
+export type Health = {
+  status: string
+  uptimeSeconds: number
+  goroutines: number
+  timestamp: string
+  version: string
+}
+
+export type ReadinessCheck = {
+  name: string
+  status: 'ok' | 'error'
+  durationMs: number
+  detail?: string
+}
+
+export type Readiness = {
+  status: 'ok' | 'unavailable'
+  checks: ReadinessCheck[]
+}
+
+export type VersionInfo = {
+  service: string
+  version: string
+  commit: string
+  date?: string
+  goVersion: string
+  platform: string
+  environment: string
+  repository?: string
+  uptimeSeconds: number
+}
+
+/** One field-level validation problem. */
+export type FieldError = {
+  field: string
+  message: string
+}
+
+/** The error envelope every non-2xx response uses. */
+export type ApiErrorBody = {
+  code: string
+  message: string
+  details?: FieldError[]
+  requestId?: string
+}
+
+/** Everything the app needs before it can paint, fetched in parallel. */
+export type Bootstrap = {
+  session: Session
+  projects: Project[]
+  categories: Category[]
+  overview: Overview
+  today: string
+}

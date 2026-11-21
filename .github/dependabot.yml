@@ -1,0 +1,64 @@
+# Keeps every dependency surface current with pull requests instead of letting
+# them rot. Grouped where the volume would otherwise be noise, and split where a
+# breaking change is plausible enough to want its own review.
+version: 2
+
+updates:
+  # Go modules. One dependency today (modernc.org/sqlite); this also covers
+  # tool dependencies added with `go get -tool`.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, go]
+    commit-message:
+      prefix: 'deps(go)'
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Frontend dependencies. Vite, Vitest and TypeScript all move quickly and
+  # occasionally break in a minor, so majors get their own pull request.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, frontend]
+    commit-message:
+      prefix: 'deps(web)'
+    groups:
+      web-minor-and-patch:
+        update-types: [minor, patch]
+      testing-library:
+        patterns: ['@testing-library/*']
+    ignore:
+      # A TypeScript major has changed the type-checking behaviour of every
+      # file in the project before; review it on its own.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+
+  # GitHub Actions, pinned by major tag in the workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: 'deps(ci)'
+    groups:
+      actions:
+        patterns: ['*']
+
+  # Docker base images. A golang or node major bump changes the build; a
+  # distroless digest bump is what actually picks up security fixes.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: 'deps(docker)'
