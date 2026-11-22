@@ -51,10 +51,18 @@ const IS_WINDOWS = hostPlatform === 'win32'
 const GOOS_BY_PLATFORM = { win32: 'windows', darwin: 'darwin', linux: 'linux', freebsd: 'freebsd' }
 const GOARCH_BY_ARCH = { x64: 'amd64', ia32: '386', arm64: 'arm64', arm: 'arm', ppc64: 'ppc64' }
 
-/** Platforms the release pipeline builds for. */
+/**
+ * Platforms the release pipeline builds for. The Docker images cover the five
+ * Linux targets that distroless supports; the extra 386 / ARMv7 archives are
+ * for people running the binary directly on old or small hardware.
+ */
 const TARGETS = [
   { goos: 'linux', goarch: 'amd64' },
   { goos: 'linux', goarch: 'arm64' },
+  { goos: 'linux', goarch: '386' },
+  { goos: 'linux', goarch: 'arm', goarm: '7' },
+  { goos: 'linux', goarch: 'ppc64le' },
+  { goos: 'linux', goarch: 's390x' },
   { goos: 'darwin', goarch: 'amd64' },
   { goos: 'darwin', goarch: 'arm64' },
   { goos: 'windows', goarch: 'amd64' },
@@ -239,14 +247,19 @@ async function buildWeb() {
 }
 
 /** Compiles the server for one platform. CGO stays off so binaries are static. */
-async function compile({ goos, goarch, out, info, trim = true }) {
+async function compile({ goos, goarch, goarm, out, info, trim = true }) {
   const args = ['build']
   if (trim) args.push('-trimpath')
   args.push('-ldflags', ldflags(info), '-o', out, './cmd/server')
 
-  log(`go build ${goos}/${goarch} → ${out}`)
+  log(`go build ${goos}/${goarch}${goarm ? `/v${goarm}` : ''} → ${out}`)
   await run(GO, args, {
-    env: { CGO_ENABLED: '0', GOOS: goos, GOARCH: goarch },
+    env: {
+      CGO_ENABLED: '0',
+      GOOS: goos,
+      GOARCH: goarch,
+      ...(goarm === undefined ? {} : { GOARM: goarm }),
+    },
   })
 }
 
@@ -286,12 +299,13 @@ async function release() {
   const stageRoot = join(outDir, 'stage')
   const names = []
 
-  for (const { goos, goarch } of TARGETS) {
-    const base = `${BINARY}_${info.version.replace(/^v/, '')}_${goos}_${goarch}`
+  for (const { goos, goarch, goarm } of TARGETS) {
+    const platform = `${goarch}${goarm === undefined ? '' : `v${goarm}`}`
+    const base = `${BINARY}_${info.version.replace(/^v/, '')}_${goos}_${platform}`
     const stage = join(stageRoot, base)
     await mkdir(stage, { recursive: true })
 
-    await compile({ goos, goarch, out: join(stage, exeName(goos)), info })
+    await compile({ goos, goarch, goarm, out: join(stage, exeName(goos)), info })
 
     const extras = ['README.md', 'LICENSE', 'AGENTS.md']
     for (const name of extras) {
@@ -360,7 +374,10 @@ async function status() {
     ],
     [KEEP_FILE, existsSync(join(EMBED_DIR, KEEP_FILE)) ? 'present' : 'MISSING (go build will fail)'],
     ['package manager', command],
-    ['release targets', TARGETS.map((t) => `${t.goos}/${t.goarch}`).join(', ')],
+    [
+      'release targets',
+      TARGETS.map((t) => `${t.goos}/${t.goarch}${t.goarm === undefined ? '' : `/v${t.goarm}`}`).join(', '),
+    ],
   ]
   const width = Math.max(...rows.map(([name]) => name.length))
   process.stdout.write(`${rows.map(([name, value]) => `${name.padEnd(width)}  ${value}`).join('\n')}\n`)

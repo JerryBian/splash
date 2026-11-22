@@ -27,7 +27,7 @@ everything and sees private projects.
 
 The Go module has **one third-party dependency**: `modernc.org/sqlite`, the
 pure-Go SQLite driver. It is there because SQLite is a product requirement and
-cgo would break the `CGO_ENABLED=0` six-platform release. Everything else —
+cgo would break the `CGO_ENABLED=0` multi-platform release. Everything else —
 router, JSON, UUIDs, logging, validation, auth (HMAC session tokens) — is
 standard library. Justify any new dependency in the PR description.
 
@@ -56,16 +56,18 @@ go run ./cmd/server                       # serves a "frontend not built" page
 node scripts/build.mjs                    # frontend + embed + host binary → bin/
 node scripts/build.mjs web                # frontend + embed only
 node scripts/build.mjs binary             # binary only (assumes web is embedded)
-node scripts/build.mjs release            # 6 platforms + archives + SHA256SUMS → dist/
+node scripts/build.mjs release            # 10 platforms + archives + SHA256SUMS → dist/
 node scripts/build.mjs status             # what would be built, and what is embedded
 node scripts/build.mjs clean
 ```
 
 Publishing is push-driven: every push to master runs `.github/workflows/release.yml`
 (verify gate → semver bump → ONE immutable GitHub Release `vX.Y.Z` → multi-arch
-images to GHCR and optionally Docker Hub, the image keeping a moving `latest`
-tag while Releases do not → optional SSH deploy to a VPS running
-`bash /ga/script/deploy-splash.sh` when `VPS_SSH_*` secrets are set).
+Linux images to GHCR and optionally Docker Hub, plus a Windows image built on a
+`windows-2022` runner; each repository is tagged only `latest` and the exact
+`X.Y.Z` version while Releases do not get a moving tag → optional SSH deploy to
+a VPS running `bash /ga/script/deploy-splash.sh` when `VPS_SSH_*` secrets are
+set).
 `node scripts/build.mjs release` locally reproduces exactly the artifacts that
 workflow uploads.
 
@@ -281,6 +283,10 @@ on failure → api.fail → api.mapError → httpx.WriteError
   encoding failure leaves the client with a truncated 200.
 - **CORS with `*` ignores `AllowCredentials`.** That is deliberate — "any origin
   may act as this user" is a configuration nobody meant to write.
+- **Windows containers are a separate image.** `Dockerfile.windows` builds the
+  Windows Server 2022 Nano Server image on a `windows-2022` runner and publishes
+  `splash-windows`; the Linux `Dockerfile` must stay Linux/distroless. Both
+  repositories use only `latest` and the exact version tag.
 - **Node and Go name platforms differently.** `scripts/build.mjs` maps
   `win32 → windows` and `x64 → amd64`; keep those maps if you add a target.
 

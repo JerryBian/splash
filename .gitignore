@@ -2,6 +2,7 @@
 # Compiled binaries. scripts/build.mjs writes here.
 /bin/
 /dist/
+/windows-image/
 *.exe
 *.exe~
 *.dll

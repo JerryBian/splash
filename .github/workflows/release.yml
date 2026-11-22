@@ -1,11 +1,13 @@
 name: Release
 
 # Every push to master produces a new version: one immutable semver release
-# (vX.Y.Z) carrying the six single-binary archives, plus multi-arch container
-# images pushed to GHCR and (when configured) Docker Hub. The Docker image keeps
-# a moving `latest` tag; GitHub Releases deliberately do NOT (the newest semver
-# release is GitHub's "Latest" by default). Pushing a v* tag publishes exactly
-# that version instead of bumping.
+# (vX.Y.Z) carrying the single-binary archives, plus container images pushed to
+# GHCR and (when configured) Docker Hub. The Linux image (`splash`) covers five
+# architectures; the Windows image (`splash-windows`) is built on a Windows
+# runner and covers windows/amd64. Both carry exactly two tags: the exact
+# version (1.2.3) and a moving `latest`. GitHub Releases deliberately do NOT get
+# a moving `latest` tag (the newest semver release is GitHub's "Latest" by
+# default). Pushing a v* tag publishes exactly that version instead of bumping.
 #
 # When everything succeeds and VPS_SSH_* secrets are configured, a final job
 # SSHes into the VPS and runs `bash /ga/script/deploy-splash.sh`; without the
@@ -97,8 +99,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
-      major: ${{ steps.v.outputs.major }}
-      minor: ${{ steps.v.outputs.minor }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -133,16 +133,11 @@ jobs:
             echo "::error::not a semver version: $version"
             exit 1
           fi
-          {
-            echo "version=$version"
-            echo "major=${version%%.*}"
-            rest="${version#*.}"
-            echo "minor=${rest%%.*}"
-          } >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publishing v$version"
 
   release:
-    name: Build binaries + publish two releases
+    name: Build binaries + publish the GitHub Release
     needs: version
     runs-on: ubuntu-latest
     permissions:
@@ -208,8 +203,11 @@ jobs:
           SPLASH_AUTH_SECRET. The user-facing UI is Chinese; everything else
           (docs, API, logs) is English.
 
-          Container images (linux/amd64 + linux/arm64):
+          Linux container image (amd64, arm64, arm/v7, ppc64le, s390x):
           ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION
+
+          Windows container image (windows/amd64, Windows Server 2022+):
+          ghcr.io/${GITHUB_REPOSITORY,,}-windows:$VERSION
           EOF
           )
 
@@ -222,7 +220,7 @@ jobs:
             --title "splash $VERSION" --notes "$notes"
 
   docker:
-    name: Container images (GHCR + Docker Hub, multi-arch)
+    name: Linux container images (GHCR + Docker Hub, 5 architectures)
     needs: version
     runs-on: ubuntu-latest
     permissions:
@@ -255,36 +253,31 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
 
+      # Exactly two tags per registry: the immutable exact version (1.2.3)
+      # and the moving `latest`. No major/minor aliases, no commit-sha tags.
       - name: Compute image tags
         id: tags
         env:
           VERSION: ${{ needs.version.outputs.version }}
-          MAJOR: ${{ needs.version.outputs.major }}
-          MINOR: ${{ needs.version.outputs.minor }}
         run: |
           set -euo pipefail
           ghcr="ghcr.io/${GITHUB_REPOSITORY,,}"
-          short="${GITHUB_SHA:0:7}"
-          suffixes="$VERSION $MAJOR.$MINOR $MAJOR latest sha-$short"
-          ghcr_tags=""
+          ghcr_tags="$ghcr:$VERSION,$ghcr:latest"
           hub_tags=""
-          for s in $suffixes; do
-            ghcr_tags="$ghcr_tags,$ghcr:$s"
-            if [ -n "$DOCKERHUB_USERNAME" ]; then
-              hub_tags="$hub_tags,docker.io/$DOCKERHUB_USERNAME/splash:$s"
-            fi
-          done
-          echo "ghcr=${ghcr_tags#,}" >> "$GITHUB_OUTPUT"
-          echo "hub=${hub_tags#,}" >> "$GITHUB_OUTPUT"
+          if [ -n "$DOCKERHUB_USERNAME" ]; then
+            hub_tags="docker.io/$DOCKERHUB_USERNAME/splash:$VERSION,docker.io/$DOCKERHUB_USERNAME/splash:latest"
+          fi
+          echo "ghcr=$ghcr_tags" >> "$GITHUB_OUTPUT"
+          echo "hub=$hub_tags" >> "$GITHUB_OUTPUT"
 
-      # One manifest list per registry covering linux/amd64 and linux/arm64;
-      # the six desktop/server binaries in the releases cover the other
-      # OS/arch combinations (containers only make sense on Linux).
+      # One manifest list per registry covering the Linux architectures that
+      # both Go and the distroless runtime support. Windows/macOS containers
+      # are a different OS family; those users get native binaries instead.
       - name: Build and push to GHCR
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/ppc64le,linux/s390x
           push: true
           tags: ${{ steps.tags.outputs.ghcr }}
           build-args: |
@@ -297,14 +290,14 @@ jobs:
       - name: Guidance if a registry push was denied
         if: failure()
         run: |
-          echo "::notice::If a push was denied (permission_denied: write_package), see README section 'Troubleshooting: GHCR push denied': repository workflow permissions, package Manage Actions access, or set the GHCR_TOKEN secret. Then use Re-run failed jobs."
+          echo "::notice::If a push was denied (permission_denied: write_package), see docs/RELEASING.md section 'Troubleshooting: GHCR push denied': repository workflow permissions, package Manage Actions access, or set the GHCR_TOKEN secret. Then use Re-run failed jobs."
 
       - name: Build and push to Docker Hub
         if: env.DOCKERHUB_USERNAME != ''
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/ppc64le,linux/s390x
           push: true
           tags: ${{ steps.tags.outputs.hub }}
           build-args: |
@@ -319,12 +312,109 @@ jobs:
         run: |
           echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set — images published to GHCR only."
 
-  # Runs only after BOTH release and docker succeed. SSHes into the VPS and
-  # runs the operator's deploy script. Skipped entirely when the VPS_SSH_*
-  # secrets are absent, so forks / unconfigured repos still publish releases.
+  # Windows containers need a Windows daemon and a Windows base image, so this
+  # is a separate job on a Windows runner. Plain `docker build` is deliberate:
+  # buildx is not reliable on GitHub-hosted Windows runners, and a single
+  # windows/amd64 image needs no cross-building. The result is a separate image
+  # repository with the same two tags as the Linux image.
+  windows-docker:
+    name: Windows container image (GHCR + Docker Hub)
+    needs: version
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      # The host binary on this runner is windows/amd64, with the frontend
+      # embedded exactly as in the release archives.
+      - name: Build the Windows binary
+        env:
+          SPLASH_VERSION: v${{ needs.version.outputs.version }}
+        run: node scripts/build.mjs
+
+      - name: Assemble the Windows image context
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows-image | Out-Null
+          Copy-Item Dockerfile.windows windows-image/Dockerfile -Force
+          Copy-Item bin/splash.exe windows-image/splash.exe -Force
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN || github.token }}
+
+      - name: Log in to Docker Hub
+        if: env.DOCKERHUB_USERNAME != ''
+        uses: docker/login-action@v4
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Build and push the Windows image
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = $env:VERSION
+          $ghcr = "ghcr.io/$($($env:GITHUB_REPOSITORY).ToLower())-windows"
+
+          docker build -f windows-image/Dockerfile `
+            --build-arg "VERSION=v$version" `
+            -t splash-windows:ci windows-image
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $tags = @("${ghcr}:$version", "${ghcr}:latest")
+          if ($env:DOCKERHUB_USERNAME) {
+            $hub = "docker.io/$($env:DOCKERHUB_USERNAME)/splash-windows"
+            $tags += @("${hub}:$version", "${hub}:latest")
+          }
+          foreach ($tag in $tags) {
+            docker tag splash-windows:ci $tag
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            docker push $tag
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if (-not $env:DOCKERHUB_USERNAME) {
+            Write-Host 'Docker Hub not configured; Windows image published to GHCR only.'
+          }
+
+      - name: Guidance if a registry push was denied
+        if: failure()
+        run: |
+          echo "::notice::If a push was denied, see docs/RELEASING.md section 'Troubleshooting: GHCR push denied'. Then use Re-run failed jobs."
+
+  # Runs only after the release, the Linux image and the Windows image succeed.
+  # SSHes into the VPS and runs the operator's deploy script. Skipped entirely
+  # when the VPS_SSH_* secrets are absent, so forks / unconfigured repos still
+  # publish releases.
   deploy:
     name: Deploy to VPS (SSH)
-    needs: [release, docker]
+    needs: [release, docker, windows-docker]
     runs-on: ubuntu-latest
     permissions:
       contents: read

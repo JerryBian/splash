@@ -1,0 +1,50 @@
+# syntax=docker/dockerfile:1
+#
+# Windows container image. Built and pushed by .github/workflows/release.yml
+# on a Windows Server 2022 runner.
+#
+# It is published as a separate image repository, `splash-windows`, because a
+# Windows container needs a Windows base image and a Windows container host.
+# The Linux image lives at `splash`; both repositories use the same two tags:
+# the exact version (1.2.3) and `latest`.
+#
+# windows/amd64 only: Windows Server containers are not published for arm64,
+# and this app's native Windows archives already cover that platform.
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
+
+ARG VERSION=dev
+
+LABEL org.opencontainers.image.title="splash (Windows)" \
+      org.opencontainers.image.description="Mobile-first check-in habit tracker: one static binary with the embedded UI and SQLite." \
+      org.opencontainers.image.source="https://github.com/JerryBian/splash" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${VERSION}"
+
+WORKDIR C:/app
+
+COPY ["splash.exe", "C:/app/splash.exe"]
+
+# WORKDIR creates the directory in the image; the volume below then has a
+# writable target for the container user.
+WORKDIR C:/data
+WORKDIR C:/app
+
+ENV SPLASH_HTTP_ADDR=:8080 \
+    SPLASH_ENV=production \
+    SPLASH_LOG_FORMAT=json \
+    SPLASH_DB_PATH=C:/data/splash.db
+
+EXPOSE 8080
+
+VOLUME ["C:/data"]
+
+# Nano Server images default to ContainerUser. The app must create the SQLite
+# database and its WAL files in the volume, so run as the built-in
+# ContainerAdministrator; isolate the container accordingly.
+USER ContainerAdministrator
+
+# Nanoserver has no curl; the binary probes its own readiness endpoint.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD ["C:/app/splash.exe", "-check", "127.0.0.1:8080"]
+
+ENTRYPOINT ["C:/app/splash.exe"]

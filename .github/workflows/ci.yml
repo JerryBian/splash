@@ -224,9 +224,10 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # Builds the runtime image on every pull request, for one architecture and
-  # without pushing. A broken Dockerfile should fail here, not on the day of a
-  # release. Multi-arch builds happen in release.yml.
+  # Builds every published architecture on every pull request, without
+  # pushing: a broken Dockerfile or a base image that dropped an architecture
+  # fails here, not on release day. The build stages are pinned to
+  # $BUILDPLATFORM, so this still cross-compiles instead of using QEMU.
   docker:
     name: Container image
     runs-on: ubuntu-latest
@@ -238,10 +239,71 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/ppc64le,linux/s390x
           push: false
           build-args: |
             VERSION=ci-${{ github.sha }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Windows containers require a Windows daemon and a Windows base image, so
+  # this runs on a Windows runner and uses plain docker (buildx is not reliable
+  # there). The image is built and started, not pushed: a broken Windows image
+  # should fail on the PR, not on release day.
+  windows-image:
+    name: Windows container image
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Build the Windows binary
+        run: node scripts/build.mjs
+
+      - name: Assemble the Windows image context
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path windows-image | Out-Null
+          Copy-Item Dockerfile.windows windows-image/Dockerfile -Force
+          Copy-Item bin/splash.exe windows-image/splash.exe -Force
+
+      - name: Build the Windows image
+        shell: pwsh
+        run: docker build -f windows-image/Dockerfile -t splash-windows:ci windows-image
+
+      - name: Smoke-test the Windows image
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          docker run -d --name splash-windows-ci -p 18080:8080 splash-windows:ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:18080/api/v1/health -TimeoutSec 2
+              if ($response.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+          }
+          docker logs splash-windows-ci
+          docker rm -f splash-windows-ci | Out-Null
+          if (-not $ok) {
+            Write-Error 'splash Windows container did not become healthy'
+            exit 1
+          }

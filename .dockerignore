@@ -10,6 +10,7 @@
 # Local build output. The image builds its own binaries.
 bin/
 dist/
+windows-image/
 coverage/
 *.out
 *.test

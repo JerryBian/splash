@@ -63,9 +63,12 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
 
+# GOARM is ignored unless GOARCH=arm; it keeps the 32-bit ARM image on the
+# ARMv7 baseline (the only arm variant this project publishes).
 ENV CGO_ENABLED=0 \
     GOOS=${TARGETOS} \
-    GOARCH=${TARGETARCH}
+    GOARCH=${TARGETARCH} \
+    GOARM=7
 
 RUN --mount=type=cache,id=go,target=/go/pkg/mod \
     --mount=type=cache,id=go-build,target=/root/.cache/go-build \
