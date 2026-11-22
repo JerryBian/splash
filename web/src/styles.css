@@ -6,7 +6,7 @@
  * pressing onto a card with an ink splatter — and everything else quiet.
  *
  * Color is a closed, validated palette (see lib/schedule.ts and the dataviz
- * checks): eight inks, each with a light and a dark step, assigned by entity
+ * checks): sixteen inks, each with a light and a dark step, assigned by entity
  * and always accompanied by an icon or a name. Text wears ink tokens, never
  * series color. Status is encoded by shape (dashed = skipped, × = missed) as
  * well as color.
@@ -44,15 +44,23 @@
      the page surfaces so large areas never read as flat plastic. */
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
 
-  /* The eight inks, light steps. Order matches the validated picker order. */
+  /* The sixteen inks, light steps. Order matches the validated picker order. */
   --ink-red: #d93025;
-  --ink-blue: #1a73e8;
+  --ink-orange: #e8710a;
+  --ink-amber: #a16207;
+  --ink-yellow: #b58900;
+  --ink-lime: #5c8a1c;
   --ink-green: #1e8e3e;
+  --ink-mint: #0f766e;
+  --ink-teal: #0891b2;
+  --ink-cyan: #0284c7;
+  --ink-blue: #1a73e8;
+  --ink-indigo: #4338ca;
+  --ink-violet: #7c3aed;
   --ink-purple: #6741d9;
   --ink-pink: #c2255c;
-  --ink-orange: #e8710a;
-  --ink-teal: #0891b2;
-  --ink-yellow: #b58900;
+  --ink-rose: #be123c;
+  --ink-slate: #475569;
 
   /* --ink is the local entity color; data-ink attributes set it. */
   --ink: var(--brand);
@@ -85,13 +93,21 @@
     --warn: #d9b45b;
     --error: #f2837a;
     --ink-red: #e5533d;
-    --ink-blue: #4c93e8;
+    --ink-orange: #d6731c;
+    --ink-amber: #d4a72c;
+    --ink-yellow: #b88d16;
+    --ink-lime: #84b840;
     --ink-green: #35a457;
+    --ink-mint: #3fb8a0;
+    --ink-teal: #22a3c4;
+    --ink-cyan: #38bdf8;
+    --ink-blue: #4c93e8;
+    --ink-indigo: #818cf8;
+    --ink-violet: #a78bfa;
     --ink-purple: #8468e8;
     --ink-pink: #d9538a;
-    --ink-orange: #d6731c;
-    --ink-teal: #22a3c4;
-    --ink-yellow: #b88d16;
+    --ink-rose: #fb7185;
+    --ink-slate: #94a3b8;
   }
 }
 
@@ -110,25 +126,41 @@
   --warn: #d9b45b;
   --error: #f2837a;
   --ink-red: #e5533d;
-  --ink-blue: #4c93e8;
+  --ink-orange: #d6731c;
+  --ink-amber: #d4a72c;
+  --ink-yellow: #b88d16;
+  --ink-lime: #84b840;
   --ink-green: #35a457;
+  --ink-mint: #3fb8a0;
+  --ink-teal: #22a3c4;
+  --ink-cyan: #38bdf8;
+  --ink-blue: #4c93e8;
+  --ink-indigo: #818cf8;
+  --ink-violet: #a78bfa;
   --ink-purple: #8468e8;
   --ink-pink: #d9538a;
-  --ink-orange: #d6731c;
-  --ink-teal: #22a3c4;
-  --ink-yellow: #b88d16;
+  --ink-rose: #fb7185;
+  --ink-slate: #94a3b8;
 }
 
 /* Entity ink assignment. Every colored surface also carries icon + name. */
 [data-ink='brand'] { --ink: var(--brand); }
 [data-ink='red'] { --ink: var(--ink-red); }
-[data-ink='blue'] { --ink: var(--ink-blue); }
+[data-ink='orange'] { --ink: var(--ink-orange); }
+[data-ink='amber'] { --ink: var(--ink-amber); }
+[data-ink='yellow'] { --ink: var(--ink-yellow); }
+[data-ink='lime'] { --ink: var(--ink-lime); }
 [data-ink='green'] { --ink: var(--ink-green); }
+[data-ink='mint'] { --ink: var(--ink-mint); }
+[data-ink='teal'] { --ink: var(--ink-teal); }
+[data-ink='cyan'] { --ink: var(--ink-cyan); }
+[data-ink='blue'] { --ink: var(--ink-blue); }
+[data-ink='indigo'] { --ink: var(--ink-indigo); }
+[data-ink='violet'] { --ink: var(--ink-violet); }
 [data-ink='purple'] { --ink: var(--ink-purple); }
 [data-ink='pink'] { --ink: var(--ink-pink); }
-[data-ink='orange'] { --ink: var(--ink-orange); }
-[data-ink='teal'] { --ink: var(--ink-teal); }
-[data-ink='yellow'] { --ink: var(--ink-yellow); }
+[data-ink='rose'] { --ink: var(--ink-rose); }
+[data-ink='slate'] { --ink: var(--ink-slate); }
 
 *,
 *::before,
@@ -1009,8 +1041,8 @@ button.mini-chip:hover {
   }
 }
 
-/* Keep the eight inks on one calm row on very narrow phones instead of
-   leaving a single orphan swatch on a second row. */
+/* Fold the swatches more tightly on very narrow phones so sixteen colors use
+   two compact rows instead of spilling into a tall block. */
 @media (max-width: 360px) {
   .color-picker {
     gap: 5px;
@@ -1019,6 +1051,10 @@ button.mini-chip:hover {
   .color-swatch {
     width: 30px;
     height: 30px;
+  }
+
+  .appearance-icons {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 
@@ -1151,9 +1187,10 @@ button.mini-chip:hover {
 }
 
 .color-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 9px 6px;
+  justify-items: center;
 }
 
 .color-swatch {
@@ -1178,14 +1215,16 @@ button.mini-chip:hover {
   box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--ink);
 }
 
+/* Keeps the white check legible on both dark inks and the pale dark-theme
+   steps. */
+.color-swatch[data-active='true'] svg {
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.55));
+}
+
 .emoji-picker {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   gap: 6px;
-}
-
-.emoji-picker.compact {
-  grid-template-columns: repeat(6, 1fr);
 }
 
 .emoji-option {
@@ -1206,8 +1245,8 @@ button.mini-chip:hover {
 }
 
 .emoji-option[data-active='true'] {
-  border-color: var(--brand);
-  background: color-mix(in oklab, var(--brand) 10%, var(--card));
+  border-color: var(--ink);
+  background: color-mix(in oklab, var(--ink) 10%, var(--card));
 }
 
 .weekday-picker {
@@ -2869,27 +2908,172 @@ button.heat-cell:hover {
   }
 }
 
-.editor-identity {
+/* The compact appearance entry: one row in the form, a grouped picker in a
+   sheet. It replaces the old wall of icons that pushed the whole form down. */
+.appearance-trigger {
+  width: 100%;
   display: flex;
+  align-items: center;
   gap: 12px;
-  align-items: flex-start;
   margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+  color: var(--ink-text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms, background 160ms;
 }
 
-.editor-preview {
+.appearance-trigger:hover {
+  border-color: color-mix(in oklab, var(--ink) 40%, var(--line));
+  background: color-mix(in oklab, var(--ink) 4%, var(--card));
+}
+
+.appearance-trigger-icon {
   flex: none;
-  width: 52px;
-  height: 52px;
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
-  font-size: 26px;
-  border-radius: 14px;
+  font-size: 22px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in oklab, var(--ink) 22%, var(--line));
   background: color-mix(in oklab, var(--ink) 12%, var(--card));
 }
 
-.editor-identity .field {
+.appearance-trigger-text {
   flex: 1;
-  margin-bottom: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.appearance-trigger-label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.appearance-trigger-value {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.appearance-trigger > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.appearance-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.appearance-hero-icon {
+  flex: none;
+  width: 60px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+  font-size: 30px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in oklab, var(--ink) 24%, var(--line));
+  background: color-mix(in oklab, var(--ink) 12%, var(--card));
+}
+
+.appearance-hero-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.appearance-hero-text strong {
+  font-size: 15px;
+}
+
+.appearance-hero-text span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.appearance-count {
+  flex: none;
+  margin-left: auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.appearance-section {
+  margin-bottom: 18px;
+}
+
+.appearance-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.appearance-section-head .sheet-subhead {
+  margin: 0;
+}
+
+.appearance-section-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.appearance-section-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.appearance-random {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: color 150ms, border-color 150ms, background 150ms;
+}
+
+.appearance-random:hover {
+  color: var(--brand);
+  border-color: color-mix(in oklab, var(--brand) 40%, var(--line));
+  background: color-mix(in oklab, var(--brand) 5%, var(--card));
+}
+
+.appearance-groups {
+  flex-wrap: wrap;
+  overflow-x: visible;
+  padding-bottom: 0;
+  margin-bottom: 10px;
+}
+
+.appearance-icons {
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+}
+
+.appearance-note {
+  margin: 10px 0 0;
 }
 
 /* --------------------------------------------------------------------- me */
@@ -3505,6 +3689,10 @@ button.heat-cell:hover {
     margin: 0 auto;
   }
 
+  .appearance-icons {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+  }
+
   .editor-form {
     max-width: 780px;
     margin: 8px auto 0;
@@ -3512,10 +3700,6 @@ button.heat-cell:hover {
 
   .overlay-page > .view.editor {
     max-width: 900px;
-  }
-
-  .editor-form .emoji-picker {
-    grid-template-columns: repeat(12, 1fr);
   }
 
   /* Overlays sit beside the rail, dialogs center instead of sliding up. */

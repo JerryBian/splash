@@ -248,7 +248,7 @@ export function RecordBadges({ backfilled, violated }: { backfilled: boolean; vi
   )
 }
 
-/** The eight validated inks as pickable swatches. Names, not color alone. */
+/** The sixteen validated inks as pickable swatches. Names, not color alone. */
 export function ColorPicker({ value, onChange }: { value: InkColor; onChange: (color: InkColor) => void }) {
   return (
     <div className="color-picker" role="group" aria-label="颜色">
@@ -265,40 +265,6 @@ export function ColorPicker({ value, onChange }: { value: InkColor; onChange: (c
           onClick={() => onChange(color)}
         >
           {color === value ? <CheckIcon size={14} strokeWidth={2.6} /> : null}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-// 48 choices: 6 even rows of 8 on a phone, 4 rows of 12 on desktop.
-const EMOJI_CHOICES = [
-  '✅', '💧', '🏃', '🧘', '🏋️', '🚶', '🚴', '🏊',
-  '⚽', '📚', '🧠', '📝', '✍️', '🎧', '🎹', '🎨',
-  '🗣️', '💻', '📖', '🔬', '🧮', '🌅', '🌙', '😴',
-  '🥗', '🍎', '🥦', '🍵', '☕', '🚭', '💊', '🦷',
-  '💰', '🧹', '🌱', '🐕', '📵', '🙏', '❤️', '🔥',
-  '⭐', '🎯', '🏆', '💪', '🧴', '👟', '🎸', '📷',
-]
-
-/**
- * Curated emoji grid — a project's face. Everything wraps: no hidden
- * horizontal strip, so every choice is visible on both phone and desktop.
- */
-export function EmojiPicker({ value, onChange }: { value: string; onChange: (emoji: string) => void }) {
-  return (
-    <div className="emoji-picker" role="group" aria-label="图标">
-      {EMOJI_CHOICES.map((emoji) => (
-        <button
-          key={emoji}
-          type="button"
-          className="emoji-option"
-          data-active={emoji === value ? 'true' : undefined}
-          aria-label={`图标 ${emoji}`}
-          aria-pressed={emoji === value}
-          onClick={() => onChange(emoji)}
-        >
-          {emoji}
         </button>
       ))}
     </div>

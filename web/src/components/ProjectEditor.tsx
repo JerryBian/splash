@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { InkColor, Project, ProjectInput, ProjectMode, ScheduleType } from '../api/types'
 import { useApp } from '../hooks/useApp'
@@ -6,8 +6,10 @@ import { useSessionHeartbeat } from '../hooks/useHeartbeat'
 import { navigate } from '../hooks/useNow'
 import { weekdayName } from '../lib/date'
 import { describeError, fieldErrorsFrom } from '../lib/errors'
+import { pickUnusedColor } from '../lib/palette'
+import { AppearanceField } from './AppearancePicker'
 import { AlertIcon, ChevronLeftIcon } from './icons'
-import { Button, Chip, ColorPicker, EmojiPicker, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
+import { Button, Chip, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
 
 const SCHEDULE_OPTIONS: { value: ScheduleType; label: string }[] = [
   { value: 'daily', label: '每天' },
@@ -35,10 +37,23 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   const { projects, categories, today, isAdmin, refresh, toast } = useApp()
   const existing: Project | undefined = projectId === 'new' ? undefined : projects.find((p) => p.id === projectId)
 
+  // New projects get a fresh ink whenever possible; an edit keeps its color.
+  // Categories participate too, so a project does not disappear into the
+  // category's own color in the charts.
+  const usedColors = useMemo(
+    () => [
+      ...projects.filter((project) => project.id !== existing?.id).map((project) => project.color),
+      ...categories.map((category) => category.color),
+    ],
+    [projects, categories, existing?.id],
+  )
+
   const [name, setName] = useState(existing?.name ?? '')
   const [description, setDescription] = useState(existing?.description ?? '')
   const [icon, setIcon] = useState(existing?.icon ?? '✅')
-  const [color, setColor] = useState<InkColor>(existing?.color ?? 'blue')
+  const [color, setColor] = useState<InkColor>(
+    existing?.color ?? pickUnusedColor(usedColors),
+  )
   const [categoryId, setCategoryId] = useState(existing?.categoryId ?? '')
   const [isPrivate, setIsPrivate] = useState(existing?.private ?? false)
   const [schedule, setSchedule] = useState<ScheduleType>(existing?.schedule ?? 'daily')
@@ -168,22 +183,17 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
           void submit()
         }}
       >
-        <div className="editor-identity">
-          <span className="editor-preview" aria-hidden="true">
-            {icon}
-          </span>
-          <Field label="名称" htmlFor="p-name" error={errors['name']}>
-            <Input id="p-name" value={name} maxLength={40} placeholder="例如：喝水" onChange={(event) => setName(event.target.value)} />
-          </Field>
-        </div>
-
-        <Field label="图标">
-          <EmojiPicker value={icon} onChange={setIcon} />
+        <Field label="名称" htmlFor="p-name" error={errors['name']}>
+          <Input id="p-name" value={name} maxLength={40} placeholder="例如：喝水" onChange={(event) => setName(event.target.value)} />
         </Field>
 
-        <Field label="颜色">
-          <ColorPicker value={color} onChange={setColor} />
-        </Field>
+        <AppearanceField
+          icon={icon}
+          color={color}
+          usedColors={usedColors}
+          onIconChange={setIcon}
+          onColorChange={setColor}
+        />
 
         <Field label="说明（可选）" htmlFor="p-desc" error={errors['description']}>
           <Textarea

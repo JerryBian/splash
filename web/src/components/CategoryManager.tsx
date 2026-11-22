@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import type { Category, InkColor } from '../api/types'
 import { useApp } from '../hooks/useApp'
 import { describeError, fieldErrorsFrom } from '../lib/errors'
+import { pickUnusedColor } from '../lib/palette'
+import { AppearanceField } from './AppearancePicker'
 import { PencilIcon, PlusIcon, TrashIcon } from './icons'
 import { ConfirmDialog } from './overlays'
-import { Button, ColorPicker, Field, IconButton, Input } from './ui'
+import { Button, Field, IconButton, Input } from './ui'
 
 /**
  * Categories: create, rename, recolor, delete. Deleting a category never
@@ -84,10 +86,17 @@ export function CategoryManager() {
 }
 
 function CategoryForm({ category, onDone }: { category: Category | null; onDone: () => void }) {
-  const { refresh, toast } = useApp()
+  const { projects, categories, refresh, toast } = useApp()
+  const usedColors = useMemo(
+    () => [
+      ...categories.filter((entry) => entry.id !== category?.id).map((entry) => entry.color),
+      ...projects.map((project) => project.color),
+    ],
+    [categories, projects, category?.id],
+  )
   const [name, setName] = useState(category?.name ?? '')
   const [icon, setIcon] = useState(category?.icon ?? '🗂️')
-  const [color, setColor] = useState<InkColor>(category?.color ?? 'blue')
+  const [color, setColor] = useState<InkColor>(category?.color ?? pickUnusedColor(usedColors))
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
 
@@ -127,26 +136,13 @@ function CategoryForm({ category, onDone }: { category: Category | null; onDone:
       <Field label="名称" htmlFor="cat-name" error={errors['name']}>
         <Input id="cat-name" value={name} maxLength={40} onChange={(event) => setName(event.target.value)} />
       </Field>
-      <Field label="图标">
-        <div className="emoji-picker compact" role="group" aria-label="分类图标">
-          {['🗂️', '💪', '📖', '🏡', '💼', '🎨', '🌱', '❤️', '🧠', '⚡', '🍀', '🎯'].map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              className="emoji-option"
-              data-active={emoji === icon ? 'true' : undefined}
-              aria-pressed={emoji === icon}
-              aria-label={`图标 ${emoji}`}
-              onClick={() => setIcon(emoji)}
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      </Field>
-      <Field label="颜色">
-        <ColorPicker value={color} onChange={setColor} />
-      </Field>
+      <AppearanceField
+        icon={icon}
+        color={color}
+        usedColors={usedColors}
+        onIconChange={setIcon}
+        onColorChange={setColor}
+      />
       <div className="form-actions">
         <Button variant="ghost" onClick={onDone}>
           取消

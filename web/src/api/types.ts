@@ -22,10 +22,27 @@ export type Session = {
  * order (adjacent inks stay distinguishable under CVD); every colored mark in
  * the UI also carries an icon or a name, never color alone.
  */
-export type InkColor = 'red' | 'blue' | 'green' | 'purple' | 'pink' | 'orange' | 'teal' | 'yellow'
+export type InkColor =
+  | 'red'
+  | 'orange'
+  | 'amber'
+  | 'yellow'
+  | 'lime'
+  | 'green'
+  | 'mint'
+  | 'teal'
+  | 'cyan'
+  | 'blue'
+  | 'indigo'
+  | 'violet'
+  | 'purple'
+  | 'pink'
+  | 'rose'
+  | 'slate'
 
 export const INK_COLORS: readonly InkColor[] = [
-  'red', 'blue', 'green', 'purple', 'pink', 'orange', 'teal', 'yellow',
+  'red', 'orange', 'amber', 'yellow', 'lime', 'green', 'mint', 'teal',
+  'cyan', 'blue', 'indigo', 'violet', 'purple', 'pink', 'rose', 'slate',
 ]
 
 /** How a project's periods are laid out. Mirrors store.ScheduleType. */

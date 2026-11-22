@@ -31,6 +31,8 @@ every N hours; goals can be one-tick checks or accumulated values with a unit.
 - **A UI that fits the screen** — phone layout with bottom navigation and
   sheets below 1024px, desktop rail and multi-column dashboards above it;
   light, dark and system themes; reduced-motion support.
+- **Plenty of personality** — 16 inks and 144 icons in a compact grouped
+  picker, with recent icons remembered on the device.
 
 ## Install
 

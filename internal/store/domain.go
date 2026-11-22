@@ -29,7 +29,10 @@ const (
 // InkColors is the closed palette a project or category may pick from. Colors
 // are stored as token names rather than hex values so the frontend can render
 // them differently in light and dark themes without a data migration.
-var InkColors = []string{"red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"}
+var InkColors = []string{
+	"red", "orange", "amber", "yellow", "lime", "green", "mint", "teal",
+	"cyan", "blue", "indigo", "violet", "purple", "pink", "rose", "slate",
+}
 
 // Moods is the closed set of check-in moods, stored as the emoji itself so no
 // translation table is needed on either end.

@@ -83,13 +83,21 @@ export function activityLevel(count: number, maxCount: number): number {
 /** The Chinese name of an ink token, for swatch labels. */
 export const INK_NAMES: Record<string, string> = {
   red: '朱红',
-  blue: '青蓝',
+  orange: '橙',
+  amber: '琥珀',
+  yellow: '金黄',
+  lime: '青柠',
   green: '翠绿',
+  mint: '薄荷',
+  teal: '碧青',
+  cyan: '天青',
+  blue: '青蓝',
+  indigo: '靛蓝',
+  violet: '紫藤',
   purple: '紫罗兰',
   pink: '品红',
-  orange: '橙',
-  teal: '碧青',
-  yellow: '金黄',
+  rose: '玫瑰',
+  slate: '石板',
 }
 
 /**

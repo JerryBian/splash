@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { AppProvider } from '../hooks/useApp'
@@ -75,17 +75,34 @@ describe('ProjectEditor', () => {
     expect(await screen.findByText('至少选择一天')).toBeInTheDocument()
   })
 
-  it('shows every icon in a wrapping grid, never a clipped strip', () => {
+  it('starts a new project with an unused random ink', () => {
     stubFetch(routes())
     const { container } = render(
       <AppProvider initial={adminBootstrap}>
         <ProjectEditor projectId="new" />
       </AppProvider>,
     )
-    const picker = container.querySelector('.emoji-picker')
-    expect(picker).not.toBeNull()
-    expect(picker?.className).not.toContain('strip')
-    expect(picker?.querySelectorAll('.emoji-option')).toHaveLength(48)
+    const trigger = container.querySelector('.appearance-trigger')
+    expect(trigger?.getAttribute('data-ink')).not.toBe('teal')
+  })
+
+  it('opens a compact appearance picker with colors and grouped icons', async () => {
+    stubFetch(routes())
+    render(
+      <AppProvider initial={adminBootstrap}>
+        <ProjectEditor projectId="new" />
+      </AppProvider>,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /图标与颜色/ }))
+    const dialog = await screen.findByRole('dialog', { name: '图标与颜色' })
+    expect(dialog.querySelectorAll('.color-swatch')).toHaveLength(16)
+    expect(dialog.querySelectorAll('.emoji-option').length).toBeGreaterThan(20)
+
+    const groups = within(dialog).getByRole('group', { name: '图标分类' })
+    await userEvent.click(within(groups).getByRole('button', { name: /学习/ }))
+    expect(dialog.querySelectorAll('.emoji-option')).toHaveLength(24)
+    expect(within(dialog).getByRole('button', { name: '图标 🧠' })).toBeInTheDocument()
   })
 
   it('loads an existing project into the form', () => {
