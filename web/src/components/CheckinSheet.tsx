@@ -5,7 +5,7 @@ import { useApp } from '../hooks/useApp'
 import { useSessionHeartbeat } from '../hooks/useHeartbeat'
 import { useLoaded } from '../hooks/useLoaded'
 import { fetchDay, invalidate } from '../lib/async'
-import { formatClock, localToday } from '../lib/date'
+import { formatClock } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatValue, progressLabel } from '../lib/format'
 import { CheckIcon, MinusIcon, PlusIcon, SkipIcon, TrashIcon } from './icons'
@@ -103,7 +103,7 @@ export function CheckinSheet({
           <span className="sheet-icon" data-ink={project.color} aria-hidden="true">
             {project.icon}
           </span>
-          {project.name}
+          <span className="sheet-project-name">{project.name}</span>
         </span>
       }
       footer={
@@ -125,7 +125,7 @@ export function CheckinSheet({
             value={date}
             min={project.startDate}
             max={today}
-            onChange={(event) => setDate(event.target.value || localToday())}
+            onChange={(event) => setDate(event.target.value || today)}
           />
         </Field>
 
@@ -188,21 +188,23 @@ export function CheckinSheet({
           />
         </Field>
 
-        <div className="mood-row" role="group" aria-label="心情">
-          {MOODS.map((m) => (
-            <button
-              key={m}
-              type="button"
-              className="mood"
-              data-active={mood === m ? 'true' : undefined}
-              aria-pressed={mood === m}
-              aria-label={`心情 ${m}`}
-              onClick={() => setMood(mood === m ? '' : m)}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <Field label="心情（可选）">
+          <div className="mood-row" role="group" aria-label="心情">
+            {MOODS.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className="mood"
+                data-active={mood === m ? 'true' : undefined}
+                aria-pressed={mood === m}
+                aria-label={`心情 ${m}`}
+                onClick={() => setMood(mood === m ? '' : m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </Field>
       </div>
 
       <div className="sheet-section">

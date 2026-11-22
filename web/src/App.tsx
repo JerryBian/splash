@@ -110,12 +110,14 @@ function Router() {
 
       {route.name === 'project' ? (
         <div className="overlay-page">
-          <ProjectDetail projectId={route.id} />
+          {/* Keyed so switching projects resets disclosure state and scroll
+              instead of showing the previous project's expanded history. */}
+          <ProjectDetail key={route.id} projectId={route.id} />
         </div>
       ) : null}
       {route.name === 'edit' ? (
         <div className="overlay-page">
-          <ProjectEditor projectId={route.id} />
+          <ProjectEditor key={route.id} projectId={route.id} />
         </div>
       ) : null}
       {route.name === 'login' ? <LoginView /> : null}

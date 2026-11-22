@@ -51,7 +51,7 @@ export function MeView() {
   }
 
   return (
-    <div className="view">
+    <div className="view me">
       <h1 className="view-title">我的</h1>
 
       <section className="me-card" aria-label="账户">

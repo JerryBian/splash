@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import type { HeatCell, InkColor, PeriodBar } from '../api/types'
 
 /** Chart hue: a project ink, or the calm brand celadon for cross-project views. */
@@ -125,10 +125,45 @@ export function Heatmap({
     return ordered
   }, [cells])
 
-  // Anchor the scroll at today (the right edge) on first paint.
+  // Anchor the scroll at today (the right edge) on first paint. The first
+  // effect pass can run before the panel's final width settles, so re-anchor
+  // once the layout stops changing; otherwise the calendar opens a few weeks
+  // short of today. A ResizeObserver also keeps today in view on rotation.
   useEffect(() => {
     const el = scrollRef.current
-    if (el !== null && columns.length > 0) el.scrollLeft = el.scrollWidth
+    if (el === null || columns.length === 0) return
+    const anchor = () => {
+      el.scrollLeft = el.scrollWidth - el.clientWidth
+    }
+    anchor()
+    const frame =
+      typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame(anchor)
+        : 0
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(anchor)
+    observer?.observe(el)
+    // Fonts and the panel's final width can land a few frames after the first
+    // pass. Follow the growing scroll width until it settles (or ~1s), then
+    // stop so a deliberate swipe is never fought.
+    let tries = 0
+    const settle = window.setInterval(() => {
+      anchor()
+      tries += 1
+      if (tries >= 8) window.clearInterval(settle)
+    }, 120)
+    // A swipe wins: stop chasing the right edge as soon as the reader reaches
+    // for the calendar.
+    const stopSettle = () => window.clearInterval(settle)
+    el.addEventListener('pointerdown', stopSettle, { once: true, passive: true })
+    el.addEventListener('wheel', stopSettle, { once: true, passive: true })
+    return () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+      window.clearInterval(settle)
+      el.removeEventListener('pointerdown', stopSettle)
+      el.removeEventListener('wheel', stopSettle)
+      observer?.disconnect()
+    }
   }, [columns])
 
   const cellLabel = (cell: HeatCell): string => {
@@ -136,15 +171,16 @@ export function Heatmap({
     return `${formatDayCN(cell.date)}：${STATUS_LABEL[cell.status]}${amount}`
   }
 
+  // Explicit width from the column count: the scroll extents are correct on
+  // the very first layout, so anchoring to today never has to wait for the
+  // browser to discover a wider grid later.
+  const colsStyle = useMemo(
+    () => ({ '--cols': columns.length }) as CSSProperties,
+    [columns.length],
+  )
+
   return (
-    <div className="heatmap" data-ink={color}>
-      <div className="heatmap-months" aria-hidden="true">
-        {columns.map((column) => (
-          <span key={column.week} className="heatmap-month">
-            {column.monthLabel}
-          </span>
-        ))}
-      </div>
+    <div className="heatmap" data-ink={color} style={colsStyle}>
       <div className="heatmap-body">
         <div className="heatmap-weekdays" aria-hidden="true">
           <span>一</span>
@@ -155,7 +191,18 @@ export function Heatmap({
           <span />
           <span>日</span>
         </div>
+        {/* Months and cells share one scroll container: the labels stay
+            aligned with their columns while the calendar is swiped, and the
+            row can no longer widen the page (the mobile horizontal-scroll
+            bug this component used to cause). */}
         <div className="heatmap-scroll" ref={scrollRef}>
+          <div className="heatmap-months" aria-hidden="true">
+            {columns.map((column) => (
+              <span key={column.week} className="heatmap-month">
+                {column.monthLabel}
+              </span>
+            ))}
+          </div>
           <div className="heatmap-grid">
             {columns.map((column) => (
               <div key={column.week} className="heatmap-col">
@@ -218,6 +265,10 @@ export function Heatmap({
         <span className="legend-item">
           <i className="legend-cell" data-status="rest" aria-hidden="true" />
           休息
+        </span>
+        <span className="legend-item">
+          <i className="legend-cell" data-status="pending" aria-hidden="true" />
+          今天
         </span>
       </div>
     </div>

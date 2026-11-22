@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useApp } from '../hooks/useApp'
 import { navigate } from '../hooks/useNow'
-import { formatDayCN, parseDay } from '../lib/date'
+import { addDays, formatDayCN, parseDay } from '../lib/date'
 import { formatValue } from '../lib/format'
 import { Donut, Heatmap, ProgressRing, Sparkline, TrendBars } from './charts'
 import { AlertIcon, ChartIcon, CheckIcon, FlameIcon, LayersIcon, SealMark, TargetIcon, TrophyIcon } from './icons'
@@ -34,6 +34,15 @@ export function StatsView() {
   const last7 = useMemo(() => overview.activity.slice(-7), [overview.activity])
   const last7Counts = useMemo(() => last7.map((d) => d.count), [last7])
   const weekTotal = useMemo(() => last7.reduce((sum, d) => sum + d.count, 0), [last7])
+  // Month-to-date series for the "本月打卡" tile: the 14-day series under
+  // "总打卡" is about recent activity, not the month.
+  const monthSpark = useMemo(
+    () =>
+      overview.activity
+        .filter((day) => day.date.slice(0, 7) === today.slice(0, 7))
+        .map((day) => day.count),
+    [overview.activity, today],
+  )
   const slices = useMemo(
     () =>
       overview.categories.map((c) => ({
@@ -51,7 +60,8 @@ export function StatsView() {
       overview.trend.map((week) => ({
         key: week.weekStart,
         start: week.weekStart,
-        end: week.weekStart,
+        // The API names the week by its Monday; the tooltip wants the range.
+        end: addDays(week.weekStart, 6),
         value: week.count,
         target: 0,
         status: week.count > 0 ? ('done' as const) : ('none' as const),
@@ -60,6 +70,16 @@ export function StatsView() {
   )
   const maxCount = Math.max(1, ...overview.activity.map((d) => d.count))
   const pct = Math.round((overview.today.done / Math.max(1, overview.today.total)) * 100)
+  const heatStats = useMemo(() => {
+    const days = overview.activity
+    const total = days.reduce((sum, day) => sum + day.count, 0)
+    const best = days.reduce((top, day) => Math.max(top, day.count), 0)
+    return {
+      activeDays: days.filter((day) => day.count > 0).length,
+      average: days.length === 0 ? 0 : total / days.length,
+      best,
+    }
+  }, [overview.activity])
 
   if (overview.totals.activeProjects === 0) {
     return (
@@ -106,7 +126,7 @@ export function StatsView() {
         <StatTile label="总打卡" value={overview.totals.checkins} icon={<CheckIcon size={14} />} sub="次" spark={last14} />
         <StatTile label="最佳连续" value={overview.totals.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
         <StatTile label="活跃项目" value={overview.totals.activeProjects} icon={<LayersIcon size={14} />} sub="个" />
-        <StatTile label="本月打卡" value={overview.totals.monthCheckins} icon={<FlameIcon size={14} />} sub="次" spark={last14} />
+        <StatTile label="本月打卡" value={overview.totals.monthCheckins} icon={<FlameIcon size={14} />} sub="次" spark={monthSpark} />
       </section>
 
       <div className="stats-cols">
@@ -115,7 +135,23 @@ export function StatsView() {
             <ChartIcon size={15} /> 全部活动
             <span className="section-hint">最近 8 周 · 每天打卡次数</span>
           </h2>
-          <Heatmap cells={activityCells} color="brand" dailyTarget={maxCount} unit=" 次" />
+          <div className="heat-layout">
+            <Heatmap cells={activityCells} color="brand" dailyTarget={maxCount} unit=" 次" />
+            <aside className="heat-aside" aria-label="活动摘要">
+              <span className="heat-fact">
+                <strong>{heatStats.activeDays}</strong>
+                <small>活跃天数</small>
+              </span>
+              <span className="heat-fact">
+                <strong>{heatStats.average.toFixed(1)}</strong>
+                <small>日均次数</small>
+              </span>
+              <span className="heat-fact">
+                <strong>{heatStats.best}</strong>
+                <small>单日最多</small>
+              </span>
+            </aside>
+          </div>
         </section>
 
         <section className="panel chart-panel" aria-label="每周趋势">
@@ -194,7 +230,7 @@ export function StatsView() {
       </div>
 
       {overview.violations > 0 ? (
-        <section className="detail-section panel chart-panel" aria-label="前置违规">
+        <section className="detail-section panel chart-panel violations-panel" aria-label="前置违规">
           <h2 className="section-head">
             <AlertIcon size={15} /> 前置违规
             <span className="section-hint">{overview.violations} 次 · 没完成前置就打了卡</span>

@@ -41,6 +41,10 @@ describe('ProjectEditor', () => {
     )
 
     await userEvent.type(screen.getByLabelText('名称'), '晨跑')
+    // The start date defaults to the server's day, not the device clock;
+    // otherwise a device one day ahead makes the date input invalid and the
+    // form's native submit is silently blocked.
+    expect(screen.getByLabelText('开始日期')).toHaveValue(TEST_TODAY)
     await userEvent.click(screen.getByText('每周'))
     await userEvent.click(screen.getByText('累计数量'))
     await userEvent.clear(screen.getByLabelText('每周目标'))

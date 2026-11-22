@@ -53,9 +53,13 @@ export function TodayView() {
   const month = (date?.getMonth() ?? 0) + 1
   const year = date?.getFullYear() ?? 2026
 
+  // A category can disappear while its chip is selected (deleted in another
+  // tab or by another session); fall back to "all" instead of an empty page.
+  const activeFilter =
+    filter === 'all' || categories.some((category) => category.id === filter) ? filter : 'all'
   const visible = useMemo(
-    () => optimistic.filter((p) => !p.archived && (filter === 'all' || p.categoryId === filter)),
-    [optimistic, filter],
+    () => optimistic.filter((p) => !p.archived && (activeFilter === 'all' || p.categoryId === activeFilter)),
+    [optimistic, activeFilter],
   )
 
   const groups = useMemo(() => {
@@ -147,11 +151,11 @@ export function TodayView() {
 
       {categories.length > 0 ? (
         <div className="chip-row" role="group" aria-label="按分类筛选">
-          <Chip active={filter === 'all'} onClick={() => setFilter('all')}>
+          <Chip active={activeFilter === 'all'} onClick={() => setFilter('all')}>
             全部
           </Chip>
           {categories.map((c) => (
-            <Chip key={c.id} active={filter === c.id} onClick={() => setFilter(c.id)}>
+            <Chip key={c.id} active={activeFilter === c.id} onClick={() => setFilter(c.id)}>
               <span aria-hidden="true">{c.icon}</span> {c.name}
             </Chip>
           ))}

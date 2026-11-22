@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
 import { INK_COLORS, type InkColor } from '../api/types'
 import { INK_NAMES } from '../lib/schedule'
 import { Sparkline } from './charts'
@@ -96,8 +96,12 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void
   ariaLabel: string
 }) {
+  // At most three columns: six schedule choices become two tidy rows instead
+  // of five-plus-one with a stretched orphan.
+  const columns = Math.min(options.length, 3)
+  const gridStyle = useMemo(() => ({ '--seg-cols': columns }) as CSSProperties, [columns])
   return (
-    <div className="segmented" role="group" aria-label={ariaLabel}>
+    <div className="segmented" role="group" aria-label={ariaLabel} style={gridStyle}>
       {options.map((option) => (
         <button
           key={option.value}
@@ -268,7 +272,8 @@ export function ColorPicker({ value, onChange }: { value: InkColor; onChange: (c
 }
 
 const EMOJI_CHOICES = [
-  '💧', '🏃', '🧘', '🏋️', '🚶', '🚴', '🏊', '⚽',
+  '✅', '💧', '🏃', '🧘', '🏋️', '🚶', '🚴', '🏊',
+  '⚽',
   '📚', '🧠', '📝', '✍️', '🎧', '🎹', '🎨', '🗣️',
   '💻', '📖', '🔬', '🧮', '🌅', '🌙', '😴', '🛏️',
   '🥗', '🍎', '🥦', '🍵', '☕', '🚭', '💊', '🦷',
@@ -276,16 +281,49 @@ const EMOJI_CHOICES = [
   '⭐', '🎯', '🏆', '💪', '🧴', '👟', '🎸', '📷',
 ]
 
-/** Curated emoji grid — a project's face, kept small enough to scan. */
-export function EmojiPicker({ value, onChange }: { value: string; onChange: (emoji: string) => void }) {
+/**
+ * Curated emoji picker — a project's face. The editor uses the strip variant:
+ * one swipeable row instead of six rows that pushed every other field below
+ * the fold on a phone. The grid variant stays for the compact category form.
+ */
+export function EmojiPicker({
+  value,
+  onChange,
+  variant = 'grid',
+}: {
+  value: string
+  onChange: (emoji: string) => void
+  variant?: 'grid' | 'strip'
+}) {
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  // Bring the current face into view when editing an existing project (or
+  // after a tap near the end of the strip). scrollLeft, not scrollTo: jsdom
+  // does not implement scrollTo and the editor is rendered in tests.
+  useEffect(() => {
+    if (variant !== 'strip') return
+    const row = rowRef.current
+    if (row === null) return
+    const active = row.querySelector<HTMLElement>('[data-active="true"]')
+    if (active !== null && active.dataset['emoji'] === value) {
+      row.scrollLeft = Math.max(0, active.offsetLeft - (row.clientWidth - active.clientWidth) / 2)
+    }
+  }, [value, variant])
+
   return (
-    <div className="emoji-picker" role="group" aria-label="图标">
+    <div
+      ref={rowRef}
+      className={`emoji-picker ${variant === 'strip' ? 'strip' : ''}`}
+      role="group"
+      aria-label="图标"
+    >
       {EMOJI_CHOICES.map((emoji) => (
         <button
           key={emoji}
           type="button"
           className="emoji-option"
           data-active={emoji === value ? 'true' : undefined}
+          data-emoji={emoji}
           aria-label={`图标 ${emoji}`}
           aria-pressed={emoji === value}
           onClick={() => onChange(emoji)}

@@ -74,7 +74,6 @@ export function ProjectCard({
           </span>
           <span className="card-sub">
             {scheduleLabel(project)}
-            {project.mode === 'check' ? <span className="mini-chip">打勾</span> : null}
             {status !== undefined && status.streak > 0 ? (
               <span className="card-streak" title={`连续 ${status.streak} 个周期`}>
                 🔥{status.streak}

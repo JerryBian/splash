@@ -40,6 +40,14 @@ describe('Heatmap', () => {
     const { container } = render(<Heatmap cells={cells} color="blue" dailyTarget={8} />)
     expect(container.querySelectorAll('button.heat-cell')).toHaveLength(0)
   })
+
+  it('keeps month labels inside the horizontal scroller', () => {
+    // Regression: the label row used to sit outside the scroller, so a
+    // 26-week calendar widened the whole page on a phone.
+    const { container } = render(<Heatmap cells={cells} color="blue" dailyTarget={8} />)
+    expect(container.querySelector('.heatmap-scroll > .heatmap-months')).not.toBeNull()
+    expect(container.querySelector('.heatmap > .heatmap-months')).toBeNull()
+  })
 })
 
 // Module scope on purpose: react-perf flags arrays created in the same scope

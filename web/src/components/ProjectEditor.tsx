@@ -4,7 +4,7 @@ import type { InkColor, Project, ProjectInput, ProjectMode, ScheduleType } from 
 import { useApp } from '../hooks/useApp'
 import { useSessionHeartbeat } from '../hooks/useHeartbeat'
 import { navigate } from '../hooks/useNow'
-import { localToday, weekdayName } from '../lib/date'
+import { weekdayName } from '../lib/date'
 import { describeError, fieldErrorsFrom } from '../lib/errors'
 import { AlertIcon, ChevronLeftIcon } from './icons'
 import { Button, Chip, ColorPicker, EmojiPicker, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
@@ -48,7 +48,10 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   const [unit, setUnit] = useState(existing?.unit ?? '次')
   const [weekdays, setWeekdays] = useState<number[]>(existing?.weekdays ?? [1, 3, 5])
   const [interval, setInterval] = useState(existing !== undefined && existing.interval > 0 ? String(existing.interval) : '2')
-  const [startDate, setStartDate] = useState(existing?.startDate ?? localToday())
+  // Default to the server's day, not the device clock: the two can differ
+  // around midnight/timezones, and a start date past the server's today would
+  // make the native date input invalid and silently block submit.
+  const [startDate, setStartDate] = useState(existing?.startDate ?? today)
   const [archived, setArchived] = useState(existing?.archived ?? false)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
@@ -155,8 +158,11 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
       <EditorBack />
       <h1 className="view-title">{existing === undefined ? '新建项目' : '编辑项目'}</h1>
 
+      {/* Native constraint validation would block submit before our Chinese
+          field messages can render; validate() is the single reporting path. */}
       <form
         className="editor-form"
+        noValidate
         onSubmit={(event) => {
           event.preventDefault()
           void submit()
@@ -172,7 +178,7 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
         </div>
 
         <Field label="图标">
-          <EmojiPicker value={icon} onChange={setIcon} />
+          <EmojiPicker value={icon} onChange={setIcon} variant="strip" />
         </Field>
 
         <Field label="颜色">
@@ -286,6 +292,11 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
           <Switch checked={archived} onChange={setArchived} label="归档" hint="归档后不再出现在今日页，历史保留" />
         ) : null}
 
+        {Object.keys(errors).length > 0 ? (
+          <p className="form-error" role="alert">
+            <AlertIcon size={13} /> 请检查标红的字段。
+          </p>
+        ) : null}
         <div className="form-actions">
           <Button variant="ghost" onClick={() => window.history.back()}>
             取消
@@ -294,11 +305,6 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
             {existing === undefined ? '创建项目' : '保存修改'}
           </Button>
         </div>
-        {Object.keys(errors).length > 0 ? (
-          <p className="form-error" role="alert">
-            <AlertIcon size={13} /> 请检查标红的字段。
-          </p>
-        ) : null}
       </form>
     </div>
   )

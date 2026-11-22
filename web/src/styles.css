@@ -138,6 +138,7 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  accent-color: var(--brand);
 }
 
 body {
@@ -149,11 +150,13 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow-x: clip;
 }
 
 button {
   font: inherit;
   color: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
 
 :focus-visible {
@@ -189,6 +192,7 @@ code {
   background-color: var(--paper);
   background-image: var(--grain);
   box-shadow: 0 0 0 1px var(--line);
+  overflow-x: clip;
 }
 
 /* The desktop rail exists in the DOM at every size (one source of truth for
@@ -264,7 +268,9 @@ code {
 }
 
 .app-main {
-  padding: 14px var(--gutter) calc(var(--nav-height) + 34px + env(safe-area-inset-bottom, 0px));
+  /* Keep the last card clear of both the bottom navigation and the FAB. */
+  padding: 14px var(--gutter) calc(var(--nav-height) + 92px + env(safe-area-inset-bottom, 0px));
+  overflow-x: clip;
 }
 
 .bottom-nav {
@@ -286,19 +292,26 @@ code {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
+  margin: 0 2px;
   background: none;
   border: 0;
-  padding: 5px 0 3px;
+  padding: 6px 0 4px;
   font-size: 10.5px;
   color: var(--muted);
   cursor: pointer;
-  border-radius: 10px;
+  border-radius: 12px;
+  transition: background 180ms, color 180ms;
 }
 
 .nav-item[data-active='true'] {
   color: var(--brand);
   font-weight: 600;
+  background: color-mix(in oklab, var(--brand) 9%, transparent);
+}
+
+.nav-item[data-active='true'] svg {
+  transform: translateY(-1px);
 }
 
 .overlay-page {
@@ -307,7 +320,9 @@ code {
   z-index: 45;
   background-color: var(--paper);
   background-image: var(--grain);
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   animation: page-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
@@ -500,11 +515,12 @@ code {
 
 .chip-row {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   overflow-x: auto;
   padding-bottom: 6px;
   margin-bottom: 4px;
   scrollbar-width: none;
+  overscroll-behavior-x: contain;
 }
 
 .chip-row::-webkit-scrollbar {
@@ -515,8 +531,9 @@ code {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 13px;
+  gap: 4px;
+  min-height: 32px;
+  padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--card);
@@ -524,12 +541,18 @@ code {
   color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
+  transition: background 160ms, border-color 160ms, color 160ms;
+}
+
+.chip:hover {
+  border-color: color-mix(in oklab, var(--brand) 35%, var(--line));
+  color: var(--ink-text);
 }
 
 .chip[data-active='true'] {
-  background: var(--ink-text);
-  border-color: var(--ink-text);
-  color: var(--paper);
+  background: color-mix(in oklab, var(--brand) 12%, var(--card));
+  border-color: color-mix(in oklab, var(--brand) 42%, var(--line));
+  color: var(--brand);
   font-weight: 600;
 }
 
@@ -601,7 +624,13 @@ code {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   overflow: hidden;
-  transition: background 300ms;
+  transition: background 300ms, border-color 180ms;
+}
+
+@media (hover: hover) {
+  .card:hover {
+    border-color: color-mix(in oklab, var(--ink) 28%, var(--line));
+  }
 }
 
 .card::before {
@@ -653,10 +682,12 @@ code {
 .card-title {
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 5px 6px;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.005em;
+  overflow-wrap: anywhere;
 }
 
 .card-lock {
@@ -667,7 +698,9 @@ code {
 .card-sub {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
   font-size: 12px;
   color: var(--muted);
 }
@@ -815,6 +848,8 @@ code {
 }
 
 button.mini-chip {
+  min-height: 30px;
+  padding: 4px 10px;
   cursor: pointer;
 }
 
@@ -851,6 +886,7 @@ button.mini-chip:hover {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  min-height: 42px;
   padding: 10px 16px;
   border-radius: var(--radius-control);
   border: 1px solid transparent;
@@ -858,7 +894,7 @@ button.mini-chip:hover {
   font-weight: 600;
   cursor: pointer;
   text-decoration: none;
-  transition: transform 120ms, filter 150ms;
+  transition: transform 120ms, filter 150ms, background 150ms, border-color 150ms;
 }
 
 .button:active {
@@ -898,8 +934,8 @@ button.mini-chip:hover {
 }
 
 .icon-button {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   flex: none;
   display: grid;
   place-items: center;
@@ -944,6 +980,7 @@ button.mini-chip:hover {
 
 .input {
   width: 100%;
+  min-height: 42px;
   padding: 10px 12px;
   border-radius: var(--radius-control);
   border: 1px solid var(--line);
@@ -952,6 +989,37 @@ button.mini-chip:hover {
   font-size: 14.5px;
   font-family: inherit;
   transition: border-color 150ms, box-shadow 150ms;
+}
+
+/* 16px on the phone stops iOS Safari from zooming the layout when a field
+   takes focus; the desktop density stays at 14.5px. */
+@media (max-width: 1023px) {
+  .input {
+    font-size: 16px;
+  }
+
+  /* The 26-week calendar scrolls sideways; a visible scrollbar on every
+     phone would compete with the page itself. Swiping still works. */
+  .heatmap-scroll {
+    scrollbar-width: none;
+  }
+
+  .heatmap-scroll::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Keep the eight inks on one calm row on very narrow phones instead of
+   leaving a single orphan swatch on a second row. */
+@media (max-width: 360px) {
+  .color-picker {
+    gap: 5px;
+  }
+
+  .color-swatch {
+    width: 30px;
+    height: 30px;
+  }
 }
 
 .input:focus {
@@ -987,9 +1055,11 @@ button.mini-chip:hover {
   gap: 12px;
 }
 
+/* Three columns at most: six schedule options read as two even rows instead
+   of five plus a stretched orphan. The column count comes from the component. */
 .segmented {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(var(--seg-cols, 3), minmax(0, 1fr));
   gap: 4px;
   background: var(--sunken);
   padding: 4px;
@@ -997,16 +1067,19 @@ button.mini-chip:hover {
 }
 
 .segmented-option {
-  flex: 1;
-  min-width: 64px;
-  padding: 8px 10px;
+  min-width: 0;
+  padding: 9px 8px;
   border-radius: 10px;
   border: 0;
   background: transparent;
   color: var(--muted);
   font-size: 13px;
   cursor: pointer;
-  transition: background 150ms, color 150ms;
+  transition: background 150ms, color 150ms, box-shadow 150ms;
+}
+
+.segmented-option:hover {
+  color: var(--ink-text);
 }
 
 .segmented-option[data-active='true'] {
@@ -1084,8 +1157,8 @@ button.mini-chip:hover {
 }
 
 .color-swatch {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: 2px solid transparent;
   background: var(--ink);
@@ -1113,6 +1186,30 @@ button.mini-chip:hover {
 
 .emoji-picker.compact {
   grid-template-columns: repeat(6, 1fr);
+}
+
+/* The editor's one-row icon strip: all choices, a fraction of the height. */
+.emoji-picker.strip {
+  display: flex;
+  grid-template-columns: none;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.emoji-picker.strip::-webkit-scrollbar {
+  display: none;
+}
+
+.emoji-picker.strip .emoji-option {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  aspect-ratio: auto;
 }
 
 .emoji-option {
@@ -1245,12 +1342,21 @@ button.mini-chip:hover {
   font-weight: 700;
   margin: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .sheet-project {
   display: flex;
   align-items: center;
   gap: 9px;
+  min-width: 0;
+}
+
+.sheet-project-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .sheet-icon {
@@ -1337,13 +1443,14 @@ button.mini-chip:hover {
 
 .mood-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 0;
 }
 
 .mood {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: 1px solid var(--line);
   background: var(--card);
@@ -1395,6 +1502,7 @@ button.mini-chip:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 8px 10px;
   border-radius: var(--radius-control);
   background: var(--paper);
@@ -1402,7 +1510,10 @@ button.mini-chip:hover {
 }
 
 .record-value {
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 52%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-family: var(--display);
   font-size: 13px;
   font-weight: 600;
@@ -1445,6 +1556,8 @@ button.mini-chip:hover {
   position: relative;
   width: 100%;
   max-width: 340px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -1456,6 +1569,7 @@ button.mini-chip:hover {
   font-size: 16px;
   font-weight: 700;
   margin: 0 0 8px;
+  overflow-wrap: anywhere;
 }
 
 .dialog-message {
@@ -1488,6 +1602,7 @@ button.mini-chip:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  max-width: 100%;
   padding: 10px 15px;
   border-radius: var(--radius-control);
   border: 0;
@@ -1498,6 +1613,7 @@ button.mini-chip:hover {
   box-shadow: 0 6px 20px rgba(10, 12, 10, 0.25);
   animation: toast-in 200ms cubic-bezier(0.2, 1.2, 0.4, 1);
   text-align: left;
+  overflow-wrap: anywhere;
 }
 
 .toast-icon {
@@ -1512,22 +1628,34 @@ button.mini-chip:hover {
 /* ---------------------------------------------------------------- heatmap */
 
 .heatmap {
-  --cell: 14px;
+  --cell: 16px;
   --gap: 3px;
+  --month-h: 18px;
   margin-top: 4px;
 }
 
+/* Months and cells live in the same scroller, so the labels keep their
+   columns while swiping and never widen the page. */
 .heatmap-months {
   display: flex;
   gap: var(--gap);
-  padding-left: 22px;
-  margin-bottom: 3px;
+  width: calc(var(--cols, 1) * var(--cell) + (var(--cols, 1) - 1) * var(--gap));
+  height: var(--month-h);
+}
+
+/* Trailing breathing room so the last month label is not sliced by the
+   scroller's right edge when the calendar is anchored to today. */
+.heatmap-months::after {
+  content: '';
+  flex: none;
+  width: 24px;
 }
 
 .heatmap-month {
   width: var(--cell);
   flex: none;
   font-size: 9.5px;
+  line-height: var(--month-h);
   color: var(--muted);
   white-space: nowrap;
   overflow: visible;
@@ -1535,7 +1663,9 @@ button.mini-chip:hover {
 
 .heatmap-body {
   display: flex;
+  align-items: flex-start;
   gap: 6px;
+  min-width: 0;
 }
 
 .heatmap-weekdays {
@@ -1544,6 +1674,8 @@ button.mini-chip:hover {
   gap: var(--gap);
   width: 16px;
   flex: none;
+  /* Months sit above the grid, so the weekday column starts lower. */
+  padding-top: var(--month-h);
 }
 
 .heatmap-weekdays span {
@@ -1556,15 +1688,20 @@ button.mini-chip:hover {
 
 .heatmap-scroll {
   overflow-x: auto;
+  overflow-y: hidden;
   flex: 1;
+  min-width: 0;
   scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--muted) 45%, transparent) transparent;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   padding-bottom: 4px;
 }
 
 .heatmap-grid {
   display: flex;
   gap: var(--gap);
-  width: max-content;
+  width: calc(var(--cols, 1) * var(--cell) + (var(--cols, 1) - 1) * var(--gap));
 }
 
 .heatmap-col {
@@ -1589,6 +1726,15 @@ button.mini-chip:hover {
 button.heat-cell {
   cursor: pointer;
   transition: transform 120ms;
+  touch-action: manipulation;
+}
+
+/* A hairline of extra hit area: the calendar stays compact without asking
+   fingers to land on a 16px square exactly. */
+button.heat-cell::after {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
 }
 
 button.heat-cell:hover {
@@ -1682,6 +1828,11 @@ button.heat-cell:hover {
   background: color-mix(in oklab, var(--sunken) 45%, var(--card));
 }
 
+.legend-cell[data-status='pending'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
 /* ------------------------------------------------------------------ trend */
 
 .trend-plot {
@@ -1772,8 +1923,27 @@ button.heat-cell:hover {
 
 /* ----------------------------------------------------------------- detail */
 
+/* Long detail/editor pages keep their way out at hand: the chevron floats on
+   a small glass disc while the content scrolls underneath. */
 .detail-back {
+  position: sticky;
+  top: 8px;
+  z-index: 12;
+  display: flex;
   margin: 2px 0 8px;
+  pointer-events: none;
+}
+
+.detail-back .icon-button {
+  pointer-events: auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--card) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 10px rgba(10, 12, 10, 0.08);
 }
 
 .detail-hero {
@@ -1800,17 +1970,20 @@ button.heat-cell:hover {
 .detail-name {
   display: flex;
   align-items: center;
-  gap: 7px;
+  flex-wrap: wrap;
+  gap: 6px 7px;
   font-size: 21px;
   font-weight: 700;
   letter-spacing: -0.01em;
   margin: 2px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .detail-desc {
   font-size: 13px;
   color: var(--muted);
   margin: 4px 0 8px;
+  overflow-wrap: anywhere;
 }
 
 .detail-chips {
@@ -1883,7 +2056,33 @@ button.heat-cell:hover {
 }
 
 .detail-now .button {
-  align-self: flex-start;
+  align-self: stretch;
+  width: 100%;
+}
+
+/* A quiet text action for optional disclosure (long history, etc.). */
+.text-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 150ms, border-color 150ms, background 150ms;
+}
+
+.text-toggle:hover {
+  color: var(--brand);
+  border-color: color-mix(in oklab, var(--brand) 40%, var(--line));
+  background: color-mix(in oklab, var(--brand) 5%, transparent);
 }
 
 .stat-grid {
@@ -2002,6 +2201,49 @@ button.heat-cell:hover {
 
 .chart-panel .section-head {
   margin: 0 0 14px;
+}
+
+/* The activity panel pairs the calendar with a small summary so a wide
+   desktop column does not read as empty paper. On a phone the facts sit under
+   the legend as one quiet row. */
+.heat-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.heat-layout > .heatmap {
+  flex: 1;
+  min-width: 0;
+}
+
+.heat-aside {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+
+.heat-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.heat-fact strong {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.heat-fact small {
+  font-size: 10.5px;
+  color: var(--muted);
 }
 
 .stats-cols > .panel {
@@ -2211,6 +2453,7 @@ button.heat-cell:hover {
   font-size: 13px;
   font-weight: 500;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .prereq-state {
@@ -2236,7 +2479,7 @@ button.heat-cell:hover {
   flex: none;
   font-size: 10.5px;
   font-weight: 600;
-  padding: 2px 8px;
+  padding: 2px 7px;
   border-radius: 999px;
   background: var(--sunken);
   color: var(--muted);
@@ -2438,6 +2681,40 @@ button.heat-cell:hover {
 
 .search-row .input {
   padding-left: 36px;
+  padding-right: 42px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.search-row input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.manage-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 2px 0;
+  margin-bottom: 2px;
+}
+
+.manage-toolbar .switch-row {
+  flex: none;
+  gap: 14px;
+  padding: 8px 0;
+}
+
+.manage-count {
+  flex: none;
+  font-family: var(--display);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
 }
 
 .manage-list {
@@ -2468,8 +2745,8 @@ button.heat-cell:hover {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 8px 10px 12px;
+  gap: 8px;
+  padding: 10px 6px 10px 10px;
   background: none;
   border: 0;
   text-align: left;
@@ -2478,8 +2755,8 @@ button.heat-cell:hover {
 
 .manage-icon {
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   font-size: 17px;
@@ -2497,9 +2774,23 @@ button.heat-cell:hover {
 .manage-name {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 5px;
+  min-width: 0;
   font-size: 14px;
   font-weight: 600;
+}
+
+.manage-project-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.manage-name > .vis-badge,
+.manage-name > .mini-chip {
+  flex: none;
 }
 
 .manage-sub {
@@ -2513,8 +2804,8 @@ button.heat-cell:hover {
 .manage-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding-right: 8px;
+  gap: 0;
+  padding-right: 4px;
 }
 
 .cat-manager {
@@ -2569,6 +2860,37 @@ button.heat-cell:hover {
 
 .editor-form {
   margin-top: 8px;
+}
+
+/* On the phone the primary action stays reachable while the long form
+   scrolls; it is still the form's own submit button, just pinned. */
+@media (max-width: 1023px) {
+  .overlay-page > .view.editor {
+    padding-bottom: calc(94px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .editor-form > .form-actions {
+    position: fixed;
+    left: 50%;
+    bottom: 0;
+    z-index: 20;
+    transform: translateX(-50%);
+    width: 100%;
+    max-width: var(--column);
+    margin: 0;
+    padding: 10px var(--gutter) calc(10px + env(safe-area-inset-bottom, 0px));
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -8px 24px color-mix(in oklab, var(--ink-text) 6%, transparent);
+  }
+
+  .editor-form > .form-actions .button {
+    flex: 1;
+  }
+
+  .editor-form > .form-error {
+    margin-bottom: 10px;
+  }
 }
 
 .editor-identity {
@@ -2858,6 +3180,7 @@ button.heat-cell:hover {
   font-size: 15.5px;
   font-weight: 700;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .empty-message {
@@ -2865,6 +3188,7 @@ button.heat-cell:hover {
   color: var(--muted);
   max-width: 260px;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .empty .button {
@@ -3155,8 +3479,21 @@ button.heat-cell:hover {
   }
 
   .heatmap {
-    --cell: 16px;
+    --cell: 18px;
     --gap: 4px;
+    --month-h: 20px;
+  }
+
+  /* The violation list is a full-width closing section on desktop, so it
+     balances the two-column dashboard instead of hugging the left edge. */
+  .view.stats > .detail-section.violations-panel {
+    max-width: none;
+  }
+
+  .view.stats > .violations-panel .record-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 16px;
   }
 
   .trend-plot {
@@ -3173,12 +3510,41 @@ button.heat-cell:hover {
     max-width: 780px;
   }
 
+  /* Manage: the project list uses the whole canvas, so the category panel
+     does too, with its rows in a compact three-column grid. */
+  .view.manage > .category-panel {
+    max-width: none;
+  }
+
+  .view.manage .cat-list {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  /* Me is a settings column, not a dashboard: center it instead of leaving a
+     wide empty right half. */
+  .view.me {
+    max-width: 780px;
+    margin: 0 auto;
+  }
+
   .editor-form {
     max-width: 780px;
+    margin: 8px auto 0;
+  }
+
+  .overlay-page > .view.editor {
+    max-width: 900px;
   }
 
   .editor-form .emoji-picker {
     grid-template-columns: repeat(12, 1fr);
+  }
+
+  .editor-form .emoji-picker.strip {
+    display: flex;
+    grid-template-columns: none;
   }
 
   /* Overlays sit beside the rail, dialogs center instead of sliding up. */
@@ -3211,6 +3577,41 @@ button.heat-cell:hover {
   .toast-host {
     bottom: 28px;
     left: calc(236px + (100vw - 236px) / 2);
+  }
+}
+
+/* Only once a stats column is genuinely wide does the activity summary sit
+   beside the calendar; below this it would squeeze the heatmap into a sliver. */
+@media (min-width: 1280px) {
+  .heat-layout {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 24px;
+  }
+
+  .heat-aside {
+    flex: none;
+    width: 190px;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    padding: 4px 0 0 20px;
+    border-top: 0;
+    border-left: 1px dashed var(--line);
+  }
+
+  .heat-fact {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .heat-fact strong {
+    font-size: 22px;
+  }
+
+  .heat-fact small {
+    font-size: 11.5px;
   }
 }
 

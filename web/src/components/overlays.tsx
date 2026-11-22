@@ -36,12 +36,21 @@ export function Sheet({
     document.addEventListener('keydown', onKey)
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    sheetRef.current?.focus()
     return () => {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previousOverflow
     }
   }, [open, onClose])
+
+  // Focus enters the sheet on open and returns to the control that opened it
+  // on close. Kept separate from the key listener so a re-rendered inline
+  // onClose callback cannot bounce focus around while the sheet is open.
+  useEffect(() => {
+    if (!open) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    sheetRef.current?.focus()
+    return () => previous?.focus()
+  }, [open])
 
   if (!open) return null
 

@@ -54,6 +54,10 @@ function DetailBody({ projectId }: { projectId: string }) {
   const [sheetDate, setSheetDate] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
+  // The API returns the latest page of history (30 records). Dumping all of
+  // them under the fold made the page three screens longer than the useful
+  // part; show a short recent list and let the reader opt into the rest.
+  const [showAllRecords, setShowAllRecords] = useState(false)
 
   const result = useLoaded(`stats:${projectId}:${today}:${version}`, () =>
     api.projectStats(projectId, { weeks: 26, date: today }),
@@ -181,7 +185,7 @@ function DetailBody({ projectId }: { projectId: string }) {
           </p>
         )}
         {isAdmin ? (
-          <Button variant="soft" onClick={() => setSheetDate(today)}>
+          <Button onClick={() => setSheetDate(today)}>
             <PlusIcon size={15} /> 打卡 / 补卡
           </Button>
         ) : null}
@@ -303,30 +307,43 @@ function DetailBody({ projectId }: { projectId: string }) {
       <section className="detail-section detail-history panel chart-panel" aria-label="最近记录">
         <h2 className="section-head">
           <CheckIcon size={15} /> 最近记录
+          <span className="section-hint">最近 {stats.recent.length} 条</span>
         </h2>
         {stats.recent.length === 0 ? (
           <p className="sheet-note">还没有记录，去盖下第一个印章吧。</p>
         ) : (
-          <ul className="record-list">
-            {stats.recent.map((record) => (
-              <li key={record.id} className="record">
-                <span className="record-value">
-                  {formatValue(record.value)} {project.unit}
-                </span>
-                <span className="record-meta">
-                  {formatDayCN(record.localDate)} {formatClock(record.checkedAt)}
-                  {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
-                  {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
-                </span>
-                <RecordBadges backfilled={record.backfilled} violated={record.violated} />
-                {isAdmin ? (
-                  <IconButton label="撤销这条记录" onClick={() => void removeRecent(record.id)}>
-                    <TrashIcon size={15} />
-                  </IconButton>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="record-list">
+              {(showAllRecords ? stats.recent : stats.recent.slice(0, 6)).map((record) => (
+                <li key={record.id} className="record">
+                  <span className="record-value">
+                    {formatValue(record.value)} {project.unit}
+                  </span>
+                  <span className="record-meta">
+                    {formatDayCN(record.localDate)} {formatClock(record.checkedAt)}
+                    {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
+                    {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
+                  </span>
+                  <RecordBadges backfilled={record.backfilled} violated={record.violated} />
+                  {isAdmin ? (
+                    <IconButton label="撤销这条记录" onClick={() => void removeRecent(record.id)}>
+                      <TrashIcon size={15} />
+                    </IconButton>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {stats.recent.length > 6 ? (
+              <button
+                type="button"
+                className="text-toggle"
+                aria-expanded={showAllRecords}
+                onClick={() => setShowAllRecords((open) => !open)}
+              >
+                {showAllRecords ? '收起记录' : `展开最近 ${stats.recent.length} 条`}
+              </button>
+            ) : null}
+          </>
         )}
       </section>
 
