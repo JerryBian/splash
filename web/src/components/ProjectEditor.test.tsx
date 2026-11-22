@@ -75,6 +75,19 @@ describe('ProjectEditor', () => {
     expect(await screen.findByText('至少选择一天')).toBeInTheDocument()
   })
 
+  it('shows every icon in a wrapping grid, never a clipped strip', () => {
+    stubFetch(routes())
+    const { container } = render(
+      <AppProvider initial={adminBootstrap}>
+        <ProjectEditor projectId="new" />
+      </AppProvider>,
+    )
+    const picker = container.querySelector('.emoji-picker')
+    expect(picker).not.toBeNull()
+    expect(picker?.className).not.toContain('strip')
+    expect(picker?.querySelectorAll('.emoji-option')).toHaveLength(48)
+  })
+
   it('loads an existing project into the form', () => {
     stubFetch(routes())
     const existing = makeProject({ id: 'p-9', name: '阅读', mode: 'value', target: 30, unit: '分钟', schedule: 'daily' })

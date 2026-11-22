@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
+import { useMemo, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
 import { INK_COLORS, type InkColor } from '../api/types'
 import { INK_NAMES } from '../lib/schedule'
 import { Sparkline } from './charts'
@@ -271,59 +271,29 @@ export function ColorPicker({ value, onChange }: { value: InkColor; onChange: (c
   )
 }
 
+// 48 choices: 6 even rows of 8 on a phone, 4 rows of 12 on desktop.
 const EMOJI_CHOICES = [
   '✅', '💧', '🏃', '🧘', '🏋️', '🚶', '🚴', '🏊',
-  '⚽',
-  '📚', '🧠', '📝', '✍️', '🎧', '🎹', '🎨', '🗣️',
-  '💻', '📖', '🔬', '🧮', '🌅', '🌙', '😴', '🛏️',
+  '⚽', '📚', '🧠', '📝', '✍️', '🎧', '🎹', '🎨',
+  '🗣️', '💻', '📖', '🔬', '🧮', '🌅', '🌙', '😴',
   '🥗', '🍎', '🥦', '🍵', '☕', '🚭', '💊', '🦷',
   '💰', '🧹', '🌱', '🐕', '📵', '🙏', '❤️', '🔥',
   '⭐', '🎯', '🏆', '💪', '🧴', '👟', '🎸', '📷',
 ]
 
 /**
- * Curated emoji picker — a project's face. The editor uses the strip variant:
- * one swipeable row instead of six rows that pushed every other field below
- * the fold on a phone. The grid variant stays for the compact category form.
+ * Curated emoji grid — a project's face. Everything wraps: no hidden
+ * horizontal strip, so every choice is visible on both phone and desktop.
  */
-export function EmojiPicker({
-  value,
-  onChange,
-  variant = 'grid',
-}: {
-  value: string
-  onChange: (emoji: string) => void
-  variant?: 'grid' | 'strip'
-}) {
-  const rowRef = useRef<HTMLDivElement>(null)
-
-  // Bring the current face into view when editing an existing project (or
-  // after a tap near the end of the strip). scrollLeft, not scrollTo: jsdom
-  // does not implement scrollTo and the editor is rendered in tests.
-  useEffect(() => {
-    if (variant !== 'strip') return
-    const row = rowRef.current
-    if (row === null) return
-    const active = row.querySelector<HTMLElement>('[data-active="true"]')
-    if (active !== null && active.dataset['emoji'] === value) {
-      row.scrollLeft = Math.max(0, active.offsetLeft - (row.clientWidth - active.clientWidth) / 2)
-    }
-  }, [value, variant])
-
+export function EmojiPicker({ value, onChange }: { value: string; onChange: (emoji: string) => void }) {
   return (
-    <div
-      ref={rowRef}
-      className={`emoji-picker ${variant === 'strip' ? 'strip' : ''}`}
-      role="group"
-      aria-label="图标"
-    >
+    <div className="emoji-picker" role="group" aria-label="图标">
       {EMOJI_CHOICES.map((emoji) => (
         <button
           key={emoji}
           type="button"
           className="emoji-option"
           data-active={emoji === value ? 'true' : undefined}
-          data-emoji={emoji}
           aria-label={`图标 ${emoji}`}
           aria-pressed={emoji === value}
           onClick={() => onChange(emoji)}

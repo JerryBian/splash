@@ -1188,30 +1188,6 @@ button.mini-chip:hover {
   grid-template-columns: repeat(6, 1fr);
 }
 
-/* The editor's one-row icon strip: all choices, a fraction of the height. */
-.emoji-picker.strip {
-  display: flex;
-  grid-template-columns: none;
-  flex-wrap: nowrap;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-  scrollbar-width: none;
-  overscroll-behavior-x: contain;
-  -webkit-overflow-scrolling: touch;
-}
-
-.emoji-picker.strip::-webkit-scrollbar {
-  display: none;
-}
-
-.emoji-picker.strip .emoji-option {
-  flex: 0 0 44px;
-  width: 44px;
-  height: 44px;
-  aspect-ratio: auto;
-}
-
 .emoji-option {
   aspect-ratio: 1;
   display: grid;
@@ -3540,11 +3516,6 @@ button.heat-cell:hover {
 
   .editor-form .emoji-picker {
     grid-template-columns: repeat(12, 1fr);
-  }
-
-  .editor-form .emoji-picker.strip {
-    display: flex;
-    grid-template-columns: none;
   }
 
   /* Overlays sit beside the rail, dialogs center instead of sliding up. */

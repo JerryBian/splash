@@ -178,7 +178,7 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
         </div>
 
         <Field label="图标">
-          <EmojiPicker value={icon} onChange={setIcon} variant="strip" />
+          <EmojiPicker value={icon} onChange={setIcon} />
         </Field>
 
         <Field label="颜色">
