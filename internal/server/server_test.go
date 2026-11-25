@@ -365,6 +365,105 @@ func TestShutdownDrainsInFlightRequests(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersOnEveryResponse(t *testing.T) {
+	srv, err := New(testConfig(t), discardLogger(), testDB(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	test := httptest.NewServer(srv.Handler())
+	t.Cleanup(test.Close)
+
+	for _, path := range []string{"/api/v1/health", "/"} {
+		resp, err := test.Client().Get(test.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		want := map[string]string{
+			"X-Content-Type-Options":     "nosniff",
+			"X-Frame-Options":            "DENY",
+			"Referrer-Policy":            "strict-origin-when-cross-origin",
+			"Cross-Origin-Opener-Policy": "same-origin",
+		}
+		for h, v := range want {
+			if got := resp.Header.Get(h); got != v {
+				t.Errorf("%s %s = %q, want %q", path, h, got, v)
+			}
+		}
+		csp := resp.Header.Get("Content-Security-Policy")
+		if !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("%s CSP = %q, want a self-only policy with frame-ancestors 'none'", path, csp)
+		}
+		if strings.Contains(csp, "unsafe-inline") && strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+			t.Errorf("%s CSP allows inline scripts: %q", path, csp)
+		}
+	}
+}
+
+func TestProductionEnablesHSTSAndSecureCookie(t *testing.T) {
+	// Go through the real config loader so the production defaults apply.
+	cfg, err := config.FromMap(map[string]string{"SPLASH_ENV": "production"})
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if !cfg.CookieSecure {
+		t.Fatal("production should default CookieSecure to true")
+	}
+	srv, err := New(cfg, discardLogger(), testDB(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	test := httptest.NewServer(srv.Handler())
+	t.Cleanup(test.Close)
+
+	resp, err := test.Client().Get(test.URL + "/api/v1/health")
+	if err != nil {
+		t.Fatalf("GET health: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got := resp.Header.Get("Strict-Transport-Security"); !strings.Contains(got, "max-age=") {
+		t.Errorf("production HSTS = %q, want a max-age directive", got)
+	}
+
+	// Production defaults the session cookie to Secure even without the env var.
+	lresp, err := test.Client().Post(test.URL+"/api/v1/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"splash123"}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	_, _ = io.ReadAll(lresp.Body)
+	_ = lresp.Body.Close()
+	cookies := lresp.Cookies()
+	if len(cookies) == 0 || !cookies[0].Secure {
+		t.Errorf("production session cookie should be Secure: %+v", cookies)
+	}
+}
+
+func TestWildcardCORSNeverAllowsCredentials(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.CORSAllowedOrigins = []string{"*"}
+	srv, err := New(cfg, discardLogger(), testDB(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	test := httptest.NewServer(srv.Handler())
+	t.Cleanup(test.Close)
+
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, test.URL+"/api/v1/health", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := test.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	_ = resp.Body.Close()
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Errorf("ACAO = %q, want *", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Credentials"); got != "" {
+		t.Errorf("wildcard CORS must not allow credentials, got %q", got)
+	}
+}
+
 func TestRunReportsABusyAddress(t *testing.T) {
 	// Hold the port so Run cannot bind it.
 	blocker, err := net.Listen("tcp", "127.0.0.1:0")

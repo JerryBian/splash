@@ -14,9 +14,9 @@ async function renderApp() {
   })
 }
 
-function successRoutes(role: 'admin' | 'anonymous') {
+function adminRoutes() {
   return {
-    '/api/v1/auth/me': role === 'admin' ? { role: 'admin', username: 'admin' } : { role: 'anonymous' },
+    '/api/v1/auth/me': { role: 'admin', username: 'admin' },
     '/api/v1/projects': { projects: [makeProject()], today: TEST_TODAY },
     '/api/v1/categories': { categories: [] },
     '/api/v1/stats/overview': makeOverview(),
@@ -38,7 +38,7 @@ describe('App', () => {
 
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const path = String(input).replace(/^https?:\/\/[^/]+/, '')
-      const routes = successRoutes('anonymous') as Record<string, unknown>
+      const routes = adminRoutes() as Record<string, unknown>
       for (const [prefix, body] of Object.entries(routes)) {
         if (path.startsWith(prefix)) {
           return {
@@ -68,24 +68,26 @@ describe('App', () => {
     expect(screen.getByText('冥想')).toBeInTheDocument()
   })
 
-  it('boots into the Today page with anonymous navigation', async () => {
-    stubFetch(successRoutes('anonymous'))
+  it('shows the login gate when nobody is signed in', async () => {
+    const fetchMock = stubFetch({ '/api/v1/auth/me': { role: 'anonymous' } })
+    await renderApp()
+    expect(screen.getByText('管理员登录')).toBeInTheDocument()
+    expect(screen.getByLabelText('用户名')).toBeInTheDocument()
+    // An anonymous bootstrap fetches no data and renders no projects.
+    expect(screen.queryByText('冥想')).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('boots into the Today page with every tab after an admin bootstrap', async () => {
+    stubFetch(adminRoutes())
     await renderApp()
     expect(screen.getByText('冥想')).toBeInTheDocument()
     // Both shells (bottom nav + desktop rail) are in the DOM; CSS picks one.
     expect(screen.getAllByText('今日').length).toBeGreaterThan(0)
     expect(screen.getAllByText('统计').length).toBeGreaterThan(0)
     expect(screen.getAllByText('我的').length).toBeGreaterThan(0)
-    // The admin tab is hidden from visitors in both shells.
-    expect(screen.queryByText('管理')).not.toBeInTheDocument()
-    expect(screen.getByText(/访客模式/)).toBeInTheDocument()
-  })
-
-  it('shows the admin tab and topbar role after an admin bootstrap', async () => {
-    stubFetch(successRoutes('admin'))
-    await renderApp()
+    // The whole app is the administrator's now: manage is always present.
     expect(screen.getAllByText('管理').length).toBeGreaterThan(0)
     expect(screen.getAllByText(/管理员/).length).toBeGreaterThan(0)
-    expect(screen.queryByText(/访客模式/)).not.toBeInTheDocument()
   })
 })

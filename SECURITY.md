@@ -12,9 +12,10 @@ week and to ship a fix or mitigation before public disclosure.
 
 ## Threat model
 
-One administrator account manages personal habit data; anonymous visitors
-read a public subset. The service is expected to run on a trusted host or
-behind a TLS-terminating reverse proxy. It is not a multi-tenant system.
+One administrator account manages personal habit data. There is no anonymous
+access: every page and every data route requires the admin session. The
+service is expected to run on a trusted host or behind a TLS-terminating
+reverse proxy. It is not a multi-tenant system.
 
 ## Authentication & sessions
 
@@ -32,12 +33,15 @@ behind a TLS-terminating reverse proxy. It is not a multi-tenant system.
 - Startup warns while the shipped default password or secret is in use.
   **Change both before exposing the service.**
 
-## Authorization & privacy of private projects
+## Authorization
 
-- Every write requires the admin role (`401` otherwise).
-- Private projects are invisible to anonymous requests on *every* read path
-  (list, detail, stats, check-ins, skips, categories roll-up): `404`, never
-  `403`, so existence is not leaked.
+- Every data route — reads included (list, detail, stats, check-ins, skips,
+  categories, overview, export) — requires the admin role (`401` otherwise).
+  The gate is applied once at registration (`api.guard`), so no handler can
+  forget it. Only `auth/login`, `auth/logout`, `auth/me` and the operational
+  probes (`health`, `health/ready`, `version`) are reachable without a session.
+- There is no per-project visibility flag anymore; all projects belong to the
+  one administrator.
 - CSRF posture: `SameSite=Lax` cookie + JSON-only API; no state-changing GET.
 - No telemetry, no analytics, no third-party requests at runtime. The display
   font is self-hosted. All data lives in the local SQLite file; `/export`

@@ -5,7 +5,9 @@ import type {
   CategoryInput,
   Checkin,
   CheckinInput,
+  ExportData,
   Health,
+  ImportCounts,
   ListProjectsParams,
   Overview,
   Project,
@@ -71,6 +73,17 @@ export class NetworkError extends Error {
 
 type RequestOptions = Omit<RequestInit, 'body'> & { body?: unknown }
 
+/**
+ * Called when a data request answers 401 — the idle session expired. The app
+ * registers this to return to the login gate. The auth door (/auth/*) is
+ * exempt: a failed login is the gate's own business, not a session expiry.
+ */
+let unauthorizedHandler: (() => void) | null = null
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, headers, ...init } = options
   const url = `${BASE_URL}${path}`
@@ -110,6 +123,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const parsed = text === '' ? null : (safeParse(text) as ApiErrorBody | T | null)
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/') && unauthorizedHandler !== null) {
+      unauthorizedHandler()
+    }
     const envelope = isApiErrorBody(parsed)
       ? parsed
       : { code: 'unexpected_response', message: describeStatus(response, text) }
@@ -259,20 +275,43 @@ export const api = {
 
   /** Same-origin URL; navigating to it downloads the backup with the session cookie. */
   exportUrl: `${BASE_URL}/export`,
+
+  /** Restores a backup additively (by id); existing data is never overwritten. */
+  importData: (data: ExportData): Promise<ImportCounts> =>
+    request<ImportCounts>('/import', { method: 'POST', body: data }),
+}
+
+/** An empty dashboard, used when nobody is signed in yet. */
+function emptyOverview(today: string): Overview {
+  return {
+    today: { date: today, total: 0, done: 0, pending: 0, skipped: 0, due: 0, slipped: 0 },
+    totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 },
+    activity: [],
+    categories: [],
+    leaders: [],
+    trend: [],
+    violations: 0,
+    recentViolations: [],
+  }
 }
 
 /**
- * Loads everything the app needs in one round of parallel requests.
+ * Loads everything the app needs, gating on the session first.
  *
- * Fetching these together rather than from four components means one Suspense
- * boundary covers the whole first paint, and the requests overlap instead of
- * serialising. The client's calendar day is sent explicitly so "today" is the
- * user's day even when the server sits in another timezone.
+ * Every data route requires the administrator, so an anonymous bootstrap must
+ * not fire the data requests (they would all 401). When nobody is signed in we
+ * return empty data and the shell renders the login gate; once signed in, the
+ * three reads run in parallel under one Suspense boundary. The client's
+ * calendar day is sent explicitly so "today" is the user's day even when the
+ * server sits in another timezone.
  */
 export async function loadBootstrap(): Promise<Bootstrap> {
   const today = localToday()
-  const [session, projectsResponse, categories, overview] = await Promise.all([
-    api.me(),
+  const session = await api.me()
+  if (session.role !== 'admin') {
+    return { session, projects: [], categories: [], overview: emptyOverview(today), today }
+  }
+  const [projectsResponse, categories, overview] = await Promise.all([
     api.listProjects({ date: today }),
     api.listCategories(),
     api.overview(today),

@@ -134,4 +134,15 @@ describe('loadBootstrap', () => {
     const call = callTo(fetchMock, '/projects')
     expect(call?.url).toMatch(/date=\d{4}-\d{2}-\d{2}/)
   })
+
+  it('fetches only the session when anonymous, returning empty data', async () => {
+    const fetchMock = stubFetch({ '/api/v1/auth/me': { role: 'anonymous' } })
+    const bootstrap = await loadBootstrap()
+    expect(bootstrap.session.role).toBe('anonymous')
+    expect(bootstrap.projects).toHaveLength(0)
+    expect(bootstrap.categories).toHaveLength(0)
+    expect(bootstrap.overview.totals.activeProjects).toBe(0)
+    // No data route is hit before login — they would all 401.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

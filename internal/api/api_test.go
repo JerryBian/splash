@@ -69,6 +69,7 @@ func newTestAPI(t *testing.T, maxBody int64) testAPI {
 		Skips:               db.Skips(),
 		Stats:               db.Stats(),
 		Export:              db,
+		Import:              db,
 		Auth:                authn,
 		LoginLimiter:        auth.NewLimiter(5, 15*time.Minute, clock.Now),
 		Log:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -340,7 +341,7 @@ func TestProjectCRUD(t *testing.T) {
 	}
 
 	// Listing carries a status for every project.
-	resp, raw = api.do(t, http.MethodGet, "/api/v1/projects?date=2026-11-21", nil)
+	resp, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects?date=2026-11-21", nil, cookie)
 	var list listProjectsResponse
 	decode(t, raw, &list)
 	if list.Today != "2026-11-21" || len(list.Projects) == 0 {
@@ -367,64 +368,56 @@ func TestProjectCRUD(t *testing.T) {
 	if resp, _ := api.adminDo(t, http.MethodDelete, "/api/v1/projects/"+p.ID, nil, cookie); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete: %d", resp.StatusCode)
 	}
-	if resp, _ := api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID, nil); resp.StatusCode != http.StatusNotFound {
+	if resp, _ := api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID, nil, cookie); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("get after delete: %d", resp.StatusCode)
 	}
 }
 
-func TestPrivateProjectsAreInvisibleToAnonymous(t *testing.T) {
+func TestEveryDataRouteRequiresAdmin(t *testing.T) {
 	api := newTestAPI(t, 0)
 	cookie := api.login(t)
-	pub := api.createProject(t, cookie, validProjectRequest("Public"))
-	privReq := validProjectRequest("Private")
-	privReq.Private = true
-	priv := api.createProject(t, cookie, privReq)
-	privID, err := uuid.Parse(priv.ID)
+	p := api.createProject(t, cookie, validProjectRequest("Water"))
+	pid, err := uuid.Parse(p.ID)
 	if err != nil {
 		t.Fatalf("parse project id: %v", err)
 	}
-	if _, err := api.db.Checkins().Create(t.Context(), privID, store.CheckinInput{Value: 1}); err != nil {
+	if _, err := api.db.Checkins().Create(t.Context(), pid, store.CheckinInput{Value: 1}); err != nil {
 		t.Fatalf("seed checkin: %v", err)
 	}
 
-	// The list shows only the public one.
-	_, raw := api.do(t, http.MethodGet, "/api/v1/projects", nil)
-	var list listProjectsResponse
-	decode(t, raw, &list)
-	if len(list.Projects) != 1 || list.Projects[0].ID != pub.ID {
-		t.Fatalf("anonymous list leaked: %+v", list.Projects)
-	}
-
-	// Every read path answers 404 — not 403, which would confirm existence.
+	// Reads are gated just like writes: an anonymous request never sees data.
 	for _, path := range []string{
-		"/api/v1/projects/" + priv.ID,
-		"/api/v1/projects/" + priv.ID + "/stats",
-		"/api/v1/projects/" + priv.ID + "/checkins",
-		"/api/v1/projects/" + priv.ID + "/skips",
+		"/api/v1/projects",
+		"/api/v1/projects/" + p.ID,
+		"/api/v1/projects/" + p.ID + "/stats",
+		"/api/v1/projects/" + p.ID + "/checkins",
+		"/api/v1/projects/" + p.ID + "/skips",
+		"/api/v1/categories",
+		"/api/v1/stats/overview",
+		"/api/v1/export",
 	} {
 		resp, raw := api.do(t, http.MethodGet, path, nil)
-		if resp.StatusCode != http.StatusNotFound {
-			t.Errorf("GET %s: status %d, body %s", path, resp.StatusCode, raw)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("anonymous GET %s: status %d, body %s", path, resp.StatusCode, raw)
 		}
 	}
 
-	// The overview counts only public check-ins.
-	_, raw = api.do(t, http.MethodGet, "/api/v1/stats/overview", nil)
+	// The admin sees the project and its check-in.
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/projects", nil, cookie)
+	var list listProjectsResponse
+	decode(t, raw, &list)
+	if len(list.Projects) != 1 {
+		t.Errorf("admin list = %d, want 1", len(list.Projects))
+	}
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/stats/overview", nil, cookie)
 	var overview store.OverviewStats
 	decode(t, raw, &overview)
-	if overview.Totals.Checkins != 0 {
-		t.Errorf("anonymous overview saw %d check-ins from the private project", overview.Totals.Checkins)
-	}
-
-	// Admin sees both.
-	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects", nil, cookie)
-	decode(t, raw, &list)
-	if len(list.Projects) != 2 {
-		t.Errorf("admin list = %d, want 2", len(list.Projects))
+	if overview.Totals.Checkins != 1 {
+		t.Errorf("admin overview checkins = %d, want 1", overview.Totals.Checkins)
 	}
 }
 
-func TestCategoriesVisibleOnlyWhenUsed(t *testing.T) {
+func TestCategoriesShowAllIncludingUnused(t *testing.T) {
 	api := newTestAPI(t, 0)
 	cookie := api.login(t)
 	mkCat := func(name string) category {
@@ -436,18 +429,14 @@ func TestCategoriesVisibleOnlyWhenUsed(t *testing.T) {
 		decode(t, raw, &c)
 		return c
 	}
-	used, unused := mkCat("Health"), mkCat("Secret category")
+	used, unused := mkCat("Health"), mkCat("Empty category")
 	req := validProjectRequest("Water")
 	req.CategoryID = used.ID
 	api.createProject(t, cookie, req)
 
-	_, raw := api.do(t, http.MethodGet, "/api/v1/categories", nil)
-	var anon listCategoriesResponse
-	decode(t, raw, &anon)
-	if len(anon.Categories) != 1 || anon.Categories[0].ID != used.ID {
-		t.Errorf("anonymous categories = %+v, want only the used one", anon.Categories)
-	}
-	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/categories", nil, cookie)
+	// There is no anonymous filter anymore: the admin sees every category,
+	// even one no project uses.
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/categories", nil, cookie)
 	var admin listCategoriesResponse
 	decode(t, raw, &admin)
 	if len(admin.Categories) != 2 {
@@ -545,7 +534,7 @@ func TestCheckinFlow(t *testing.T) {
 	}
 
 	// The project is done now.
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil, cookie)
 	var stats statsResponse
 	decode(t, raw, &stats)
 	if stats.Summary.Status != "done" || stats.Summary.Streak != 1 {
@@ -553,7 +542,7 @@ func TestCheckinFlow(t *testing.T) {
 	}
 
 	// History lists it; undo removes it and the stats follow.
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/checkins", nil)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/checkins", nil, cookie)
 	var hist listCheckinsResponse
 	decode(t, raw, &hist)
 	if len(hist.Checkins) != 1 {
@@ -562,7 +551,7 @@ func TestCheckinFlow(t *testing.T) {
 	if resp, _ := api.adminDo(t, http.MethodDelete, "/api/v1/checkins/"+c.ID, nil, cookie); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("undo: %d", resp.StatusCode)
 	}
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil, cookie)
 	decode(t, raw, &stats)
 	if stats.Summary.Status != "pending" || stats.Totals.Checkins != 0 {
 		t.Errorf("stats after undo = %+v / %+v", stats.Summary, stats.Totals)
@@ -612,7 +601,7 @@ func TestSkipFlow(t *testing.T) {
 		t.Errorf("duplicate skip: %d", resp.StatusCode)
 	}
 
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil, cookie)
 	var stats statsResponse
 	decode(t, raw, &stats)
 	if stats.Summary.Streak != 2 {
@@ -626,7 +615,7 @@ func TestSkipFlow(t *testing.T) {
 	if resp, _ := api.adminDo(t, http.MethodDelete, "/api/v1/projects/"+p.ID+"/skips/2026-11-20", nil, cookie); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("unskip: %d", resp.StatusCode)
 	}
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats", nil, cookie)
 	decode(t, raw, &stats)
 	if stats.Totals.Missed != 1 || stats.Summary.Streak != 0 {
 		t.Errorf("after unskip: missed %d streak %d, want 1/0", stats.Totals.Missed, stats.Summary.Streak)
@@ -647,7 +636,7 @@ func TestWeekdaysAndIntervalSchedules(t *testing.T) {
 	ih.Interval = 2
 	ihProject := api.createProject(t, cookie, ih)
 
-	_, raw := api.do(t, http.MethodGet, "/api/v1/projects?date=2026-11-21", nil)
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/projects?date=2026-11-21", nil, cookie)
 	var list listProjectsResponse
 	decode(t, raw, &list)
 	byID := map[string]project{}
@@ -664,11 +653,14 @@ func TestWeekdaysAndIntervalSchedules(t *testing.T) {
 		t.Fatalf("interval status = %+v, want waiting with dueAt", s)
 	}
 	api.clock.Advance(3 * time.Hour)
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+ihProject.ID, nil)
+	// The advance outlives the 1h session TTL, and reads are gated now, so
+	// re-authenticate before the next read.
+	cookie = api.login(t)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+ihProject.ID, nil, cookie)
 	var got project
 	decode(t, raw, &got)
-	if got.Status.Status != "due" {
-		t.Errorf("interval after 3h = %q, want due", got.Status.Status)
+	if got.Status == nil || got.Status.Status != "due" {
+		t.Errorf("interval after 3h = %+v, want due", got.Status)
 	}
 }
 
@@ -682,7 +674,7 @@ func TestStatsShapeAndWeeksParam(t *testing.T) {
 		api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins", checkinRequest{Value: 1, Date: day}, cookie)
 	}
 
-	resp, raw := api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats?weeks=4&date=2026-11-21", nil)
+	resp, raw := api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats?weeks=4&date=2026-11-21", nil, cookie)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("stats: %d %s", resp.StatusCode, raw)
 	}
@@ -706,7 +698,7 @@ func TestStatsShapeAndWeeksParam(t *testing.T) {
 		t.Error("stats should embed the project")
 	}
 
-	if resp, _ := api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats?weeks=99", nil); resp.StatusCode != http.StatusBadRequest {
+	if resp, _ := api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats?weeks=99", nil, cookie); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("weeks=99: %d", resp.StatusCode)
 	}
 }
@@ -718,7 +710,7 @@ func TestOverviewCounters(t *testing.T) {
 	b := api.createProject(t, cookie, validProjectRequest("Reading"))
 	api.adminDo(t, http.MethodPost, "/api/v1/projects/"+a.ID+"/checkins", checkinRequest{Value: 1}, cookie)
 
-	_, raw := api.do(t, http.MethodGet, "/api/v1/stats/overview?date=2026-11-21", nil)
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/stats/overview?date=2026-11-21", nil, cookie)
 	var o store.OverviewStats
 	decode(t, raw, &o)
 	if o.Today.Total != 2 || o.Today.Done != 1 || o.Today.Pending != 1 {
@@ -734,6 +726,62 @@ func TestOverviewCounters(t *testing.T) {
 		t.Errorf("leaders = %+v, want the checked-in project first", o.Leaders)
 	}
 	_ = b
+}
+
+func TestBadHabitFlow(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	req := validProjectRequest("Late nights")
+	req.Nature = "bad"
+	req.StartDate = "2026-11-18"
+	p := api.createProject(t, cookie, req)
+	if p.Nature != "bad" || p.Mode != "check" {
+		t.Fatalf("created bad project = %+v, want nature bad / check mode", p)
+	}
+
+	// A clean day reads as done (held); the streak counts survived days.
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats?date=2026-11-21", nil, cookie)
+	var stats statsResponse
+	decode(t, raw, &stats)
+	if stats.Summary.Status != "done" || stats.Summary.Streak != 3 {
+		t.Errorf("clean bad stats = %+v, want done / streak 3", stats.Summary)
+	}
+
+	// Recording a lapse today spoils today and resets the streak.
+	resp, raw := api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins", checkinRequest{Value: 1}, cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("lapse: %d %s", resp.StatusCode, raw)
+	}
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"/stats?date=2026-11-21", nil, cookie)
+	decode(t, raw, &stats)
+	if stats.Summary.Status != "missed" || stats.Summary.Streak != 0 {
+		t.Errorf("lapsed bad stats = %+v, want missed / streak 0", stats.Summary)
+	}
+	if stats.Totals.Missed != 1 || stats.Totals.Done != 3 {
+		t.Errorf("bad totals = %+v, want 3 done / 1 missed", stats.Totals)
+	}
+
+	// The overview tallies the lapse as a slip, not a check-in, and counts it
+	// in today's slipped counter.
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/stats/overview?date=2026-11-21", nil, cookie)
+	var o store.OverviewStats
+	decode(t, raw, &o)
+	if o.Totals.Checkins != 0 || o.Totals.Slips != 1 {
+		t.Errorf("overview totals = %+v, want 0 checkins / 1 slip", o.Totals)
+	}
+	if o.Today.Slipped != 1 || o.Today.Done != 0 {
+		t.Errorf("overview today = %+v, want 1 slipped / 0 done", o.Today)
+	}
+
+	// interval_hours is rejected for a bad habit.
+	ih := validProjectRequest("Bad timer")
+	ih.Nature = "bad"
+	ih.Schedule = "interval_hours"
+	ih.Interval = 2
+	resp, _ = api.adminDo(t, http.MethodPost, "/api/v1/projects", ih, cookie)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("bad + interval_hours: %d, want 422", resp.StatusCode)
+	}
 }
 
 func TestExportIsAdminOnlyAndComplete(t *testing.T) {
@@ -756,6 +804,45 @@ func TestExportIsAdminOnlyAndComplete(t *testing.T) {
 	}
 }
 
+func TestImportFlow(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	p := api.createProject(t, cookie, validProjectRequest("Water"))
+	api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins", checkinRequest{Value: 1}, cookie)
+
+	// Export, then import the same payload into a fresh database via the API.
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/export", nil, cookie)
+	var dump store.ExportData
+	decode(t, raw, &dump)
+
+	// Anonymous import is refused.
+	resp, _ := api.do(t, http.MethodPost, "/api/v1/import", dump)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("anonymous import: %d, want 401", resp.StatusCode)
+	}
+
+	// Admin import succeeds and reports counts.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/import", dump, cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("import: %d %s", resp.StatusCode, raw)
+	}
+	var counts store.ImportCounts
+	decode(t, raw, &counts)
+	// The project and check-in already exist here, so additive import adds none.
+	if counts.Projects != 0 || counts.Checkins != 0 {
+		t.Errorf("re-import into same db counts = %+v, want 0/0", counts)
+	}
+
+	// A backup referencing an unknown project is a 422, not a 500.
+	bad := store.ExportData{Checkins: []store.Checkin{{
+		ID: uuid.New(), ProjectID: uuid.New(), Value: 1, LocalDate: "2026-11-10",
+	}}}
+	resp, _ = api.adminDo(t, http.MethodPost, "/api/v1/import", bad, cookie)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("dangling import: %d, want 422", resp.StatusCode)
+	}
+}
+
 func TestArchivedProjects(t *testing.T) {
 	api := newTestAPI(t, 0)
 	cookie := api.login(t)
@@ -763,7 +850,7 @@ func TestArchivedProjects(t *testing.T) {
 	archived := true
 	api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+p.ID, projectPatchRequest{Archived: &archived}, cookie)
 
-	_, raw := api.do(t, http.MethodGet, "/api/v1/projects", nil)
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/projects", nil, cookie)
 	var list listProjectsResponse
 	decode(t, raw, &list)
 	if len(list.Projects) != 0 {
@@ -845,11 +932,11 @@ func TestConditionalGET(t *testing.T) {
 	api := newTestAPI(t, 0)
 	cookie := api.login(t)
 	p := api.createProject(t, cookie, validProjectRequest("Cached"))
-	resp, _ := api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID, nil, "If-None-Match", `"v1"`)
+	resp, _ := api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID, nil, cookie, "If-None-Match", `"v1"`)
 	if resp.StatusCode != http.StatusNotModified {
 		t.Errorf("matching If-None-Match: %d", resp.StatusCode)
 	}
-	resp, _ = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID, nil, "If-None-Match", `"v9"`)
+	resp, _ = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID, nil, cookie, "If-None-Match", `"v9"`)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("stale If-None-Match: %d", resp.StatusCode)
 	}
@@ -862,27 +949,28 @@ func TestDateParamShiftsTheView(t *testing.T) {
 	api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins", checkinRequest{Value: 1, Date: "2026-11-20"}, cookie)
 
 	// From yesterday's point of view the project is done; from today's, pending.
-	_, raw := api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"?date=2026-11-20", nil)
+	_, raw := api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"?date=2026-11-20", nil, cookie)
 	var p1 project
 	decode(t, raw, &p1)
 	if p1.Status.Status != "done" {
 		t.Errorf("yesterday view = %q, want done", p1.Status.Status)
 	}
-	_, raw = api.do(t, http.MethodGet, "/api/v1/projects/"+p.ID+"?date=2026-11-21", nil)
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+p.ID+"?date=2026-11-21", nil, cookie)
 	var p2 project
 	decode(t, raw, &p2)
 	if p2.Status.Status != "pending" {
 		t.Errorf("today view = %q, want pending", p2.Status.Status)
 	}
-	if resp, _ := api.do(t, http.MethodGet, "/api/v1/projects?date=banana", nil); resp.StatusCode != http.StatusBadRequest {
+	if resp, _ := api.adminDo(t, http.MethodGet, "/api/v1/projects?date=banana", nil, cookie); resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("bad date param: %d", resp.StatusCode)
 	}
 }
 
 func TestMalformedIDIsA400(t *testing.T) {
 	api := newTestAPI(t, 0)
+	cookie := api.login(t)
 	for _, path := range []string{"/api/v1/projects/not-a-uuid", "/api/v1/projects/123"} {
-		resp, _ := api.do(t, http.MethodGet, path, nil)
+		resp, _ := api.adminDo(t, http.MethodGet, path, nil, cookie)
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("GET %s: %d", path, resp.StatusCode)
 		}

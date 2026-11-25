@@ -80,6 +80,7 @@ func New(cfg config.Config, log *slog.Logger, db *store.DB) (*Server, error) {
 		Skips:               db.Skips(),
 		Stats:               db.Stats(),
 		Export:              db,
+		Import:              db,
 		Auth:                authn,
 		Log:                 log,
 		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,

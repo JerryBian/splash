@@ -1,8 +1,8 @@
 import { useMemo, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
-import { INK_COLORS, type InkColor } from '../api/types'
+import { INK_COLORS, type InkColor, type ProjectNature } from '../api/types'
 import { INK_NAMES } from '../lib/schedule'
 import { Sparkline } from './charts'
-import { CheckIcon, EyeIcon, LockIcon } from './icons'
+import { AlertIcon, CheckIcon } from './icons'
 
 /**
  * Small primitives. Class names are the contract with styles.css; variants
@@ -221,14 +221,15 @@ export function StatTile({
 }
 
 /**
- * Explicit visibility badge: admins must be able to tell at a glance which
- * projects anonymous visitors can see. Icon + word, never color alone.
+ * Nature badge: marks a habit to break so it is never mistaken for a habit to
+ * build. Good habits are the unmarked default; only bad habits carry the badge.
+ * Icon + word, never color alone.
  */
-export function VisibilityBadge({ isPrivate }: { isPrivate: boolean }) {
+export function NatureBadge({ nature }: { nature: ProjectNature }) {
+  if (nature !== 'bad') return null
   return (
-    <span className="vis-badge" data-private={isPrivate ? 'true' : undefined}>
-      {isPrivate ? <LockIcon size={11} /> : <EyeIcon size={11} />}
-      {isPrivate ? '私有' : '公开'}
+    <span className="nature-badge" data-nature="bad">
+      <AlertIcon size={11} /> 坏习惯
     </span>
   )
 }

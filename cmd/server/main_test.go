@@ -312,7 +312,28 @@ func TestSeedFlagPopulatesAnEmptyDatabase(t *testing.T) {
 	}
 	addr := listeningAddr(t, stdout.String())
 
-	resp, err := http.Get("http://" + addr + "/api/v1/projects")
+	// Data routes require the administrator now, so log in with the default
+	// credentials and read the seeded projects with the session cookie.
+	loginResp, err := http.Post("http://"+addr+"/api/v1/auth/login", "application/json",
+		strings.NewReader(`{"username":"admin","password":"splash123"}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	_, _ = io.ReadAll(loginResp.Body)
+	_ = loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d", loginResp.StatusCode)
+	}
+	cookies := loginResp.Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("login set no cookie")
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+addr+"/api/v1/projects", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.AddCookie(cookies[0])
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET projects: %v", err)
 	}

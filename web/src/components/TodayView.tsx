@@ -5,13 +5,21 @@ import { useApp } from '../hooks/useApp'
 import { navigate } from '../hooks/useNow'
 import { parseDay, tzOffset, weekdayName, weekdayOf } from '../lib/date'
 import { describeError } from '../lib/errors'
-import { activityLevel, needsValueSheet } from '../lib/schedule'
+import { activityLevel, isBad, needsValueSheet } from '../lib/schedule'
 import { CheckinSheet } from './CheckinSheet'
 import { ProgressRing } from './charts'
 import { ConfirmDialog } from './overlays'
-import { CalendarIcon, LockIcon, PlusIcon } from './icons'
+import { CalendarIcon, PlusIcon, SealMark } from './icons'
 import { ProjectCard } from './ProjectCard'
 import { Button, Chip, EmptyState } from './ui'
+
+/** A time-of-day greeting for the Today header. */
+function greeting(): string {
+  const hour = new Date().getHours()
+  if (hour < 12) return '早上好'
+  if (hour < 18) return '下午好'
+  return '晚上好'
+}
 
 type CheckinAction = { id: string; value: number }
 
@@ -22,6 +30,13 @@ function optimisticProjects(state: Project[], action: CheckinAction): Project[] 
     const status = project.status
     const value = status.value + action.value
     const todayValue = status.todayValue + action.value
+    // A bad habit's record is a lapse: it spoils the period immediately.
+    if (isBad(project)) {
+      return {
+        ...project,
+        status: { ...status, value, todayValue, count: status.count + 1, status: 'missed' },
+      }
+    }
     const complete = status.target > 0 && value >= status.target
     return {
       ...project,
@@ -38,11 +53,12 @@ function optimisticProjects(state: Project[], action: CheckinAction): Project[] 
 
 /**
  * The Today page: the date as a stamp-sheet header, the week at a glance,
- * then projects grouped by category. One tap checks in; the seal animation
- * and splatter live in ProjectCard.
+ * then projects grouped by category. One tap checks in a good habit; the seal
+ * animation and splatter live in ProjectCard. A bad habit opens the record
+ * sheet instead, so logging a lapse is deliberate rather than a stray tap.
  */
 export function TodayView() {
-  const { projects, categories, overview, today, isAdmin, refresh, toast } = useApp()
+  const { projects, categories, overview, today, refresh, toast } = useApp()
   const [filter, setFilter] = useState<string>('all')
   const [sheet, setSheet] = useState<{ project: Project; date: string } | null>(null)
   const [gateProject, setGateProject] = useState<Project | null>(null)
@@ -88,6 +104,11 @@ export function TodayView() {
   }
 
   const handleStamp = (project: Project, _event: MouseEvent<HTMLButtonElement>) => {
+    // Recording a lapse is deliberate: always open the sheet for a bad habit.
+    if (isBad(project)) {
+      setSheet({ project, date: today })
+      return
+    }
     const status = project.status?.status
     if (status === 'done' || status === 'skipped' || status === 'rest' || needsValueSheet(project)) {
       setSheet({ project, date: today })
@@ -107,6 +128,7 @@ export function TodayView() {
   return (
     <div className="view">
       <header className="today-head">
+        <SealMark size={132} className="today-watermark" />
         <div className="today-date">
           <span className="today-number">{dayNumber}</span>
           <span className="today-meta">
@@ -139,15 +161,10 @@ export function TodayView() {
         </span>
       </header>
 
-      {!isAdmin ? (
-        <div className="anon-banner">
-          <LockIcon size={16} />
-          <span>访客模式：仅展示公开项目。登录后可打卡与管理。</span>
-          <Button variant="soft" onClick={() => navigate('#login')}>
-            登录
-          </Button>
-        </div>
-      ) : null}
+      <p className="today-greeting">
+        {greeting()}，把每一天盖成印章。
+        {overview.today.slipped > 0 ? `今天有 ${overview.today.slipped} 个坏习惯破戒了，明天继续守住。` : ''}
+      </p>
 
       {categories.length > 0 ? (
         <div className="chip-row" role="group" aria-label="按分类筛选">
@@ -162,33 +179,21 @@ export function TodayView() {
         </div>
       ) : null}
 
-      {isAdmin ? (
-        <div className="today-actions">
-          <Button variant="soft" onClick={() => navigate('#edit/new')}>
-            <PlusIcon size={15} /> 新建项目
-          </Button>
-        </div>
-      ) : null}
+      <div className="today-actions">
+        <Button variant="soft" onClick={() => navigate('#edit/new')}>
+          <PlusIcon size={15} /> 新建项目
+        </Button>
+      </div>
 
       {visible.length === 0 ? (
         <EmptyState
           icon={<CalendarIcon size={30} />}
-          title={isAdmin ? '今天还没有打卡项目' : '还没有公开的打卡项目'}
-          message={
-            isAdmin
-              ? '创建一个项目，开始盖下第一个印章。'
-              : '管理员登录后可创建项目；公开的项目会展示在这里。'
-          }
+          title="今天还没有打卡项目"
+          message="创建一个项目，开始盖下第一个印章。"
           action={
-            isAdmin ? (
-              <Button onClick={() => navigate('#edit/new')}>
-                <PlusIcon size={16} /> 新建项目
-              </Button>
-            ) : (
-              <Button variant="soft" onClick={() => navigate('#login')}>
-                管理员登录
-              </Button>
-            )
+            <Button onClick={() => navigate('#edit/new')}>
+              <PlusIcon size={16} /> 新建项目
+            </Button>
           }
         />
       ) : (
@@ -205,7 +210,6 @@ export function TodayView() {
                 <ProjectCard
                   key={project.id}
                   project={project}
-                  isAdmin={isAdmin}
                   onOpen={() => navigate(`#project/${project.id}`)}
                   onStamp={handleStamp}
                 />
@@ -215,7 +219,7 @@ export function TodayView() {
         ))
       )}
 
-      {isAdmin && visible.length > 0 ? (
+      {visible.length > 0 ? (
         <button type="button" className="fab" aria-label="新建项目" onClick={() => navigate('#edit/new')}>
           <PlusIcon size={22} strokeWidth={2.2} />
         </button>

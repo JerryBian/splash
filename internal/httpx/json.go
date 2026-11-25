@@ -17,9 +17,26 @@ import (
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"strconv"
 )
+
+// ErrUnsupportedMediaType reports a request body that is not declared as JSON.
+// Handlers map it to 415.
+var ErrUnsupportedMediaType = errors.New("httpx: request body must be application/json")
+
+// IsUnsupportedMediaType reports whether err is the content-type rejection.
+func IsUnsupportedMediaType(err error) bool { return errors.Is(err, ErrUnsupportedMediaType) }
+
+// isJSONContentType accepts "application/json" with optional parameters
+// (charset, boundary). Requiring it is CSRF defence in depth: a cross-site
+// form POST cannot set this content type without triggering a CORS preflight,
+// so only same-origin JSON requests (or non-browser clients) reach a handler.
+func isJSONContentType(header string) bool {
+	mediaType, _, err := mime.ParseMediaType(header)
+	return err == nil && mediaType == "application/json"
+}
 
 // Content types used across the API. Only the two the service actually sends
 // are declared: an unused constant is an invitation to guess at a convention
@@ -73,6 +90,9 @@ func Write(w http.ResponseWriter, status int, contentType string, body []byte) {
 // are rejected with a typed error rather than quietly accepted.
 func DecodeJSON[T any](w http.ResponseWriter, r *http.Request, maxBytes int64) (T, error) {
 	var out T
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		return out, ErrUnsupportedMediaType
+	}
 	body := r.Body
 	if maxBytes > 0 {
 		body = http.MaxBytesReader(w, r.Body, maxBytes)

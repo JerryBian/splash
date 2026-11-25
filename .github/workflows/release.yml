@@ -183,33 +183,26 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          # The previous release tag, captured before we create the new one.
+          prev="$(git tag -l 'v[0-9]*' | sed 's/^v//' | sort -V | tail -n1)"
+
           if [ "$GITHUB_REF_TYPE" != "tag" ]; then
             git tag -a "$VERSION" -m "splash $VERSION"
             git push origin "$VERSION"
           fi
 
-          notes=$(cat <<EOF
-          splash $VERSION — commit ${GITHUB_SHA:0:7}
-
-          Each archive contains ONE self-contained executable: the web UI is
-          embedded and SQLite is pure Go, so there is no runtime or dependency
-          to install. Unpack and run:
-
-              ./splash            # Linux / macOS
-              splash.exe          # Windows
-
-          Default account admin / splash123; pass -seed on first run to load
-          demo data. For production set SPLASH_ADMIN_PASSWORD and
-          SPLASH_AUTH_SECRET. The user-facing UI is Chinese; everything else
-          (docs, API, logs) is English.
-
-          Linux container image (amd64, arm64, arm/v7, ppc64le, s390x):
-          ghcr.io/${GITHUB_REPOSITORY,,}:$VERSION
-
-          Windows container image (windows/amd64, Windows Server 2022+):
-          ghcr.io/${GITHUB_REPOSITORY,,}-windows:$VERSION
-          EOF
-          )
+          # Release notes are the commits this release actually contains, so
+          # every release reads differently instead of repeating a template.
+          if [ -n "$prev" ]; then
+            range="v${prev}..${VERSION}"
+            heading="Changes since v${prev}"
+          else
+            range="$VERSION"
+            heading="Initial release"
+          fi
+          commits="$(git log --no-merges --pretty=format:'- %s (%h)' "$range" | head -n 200)"
+          notes="$(printf '## %s\n\n%s\n\n---\nEach archive is ONE self-contained executable (embedded UI, pure-Go SQLite): unpack and run `./splash` (Linux/macOS) or `splash.exe` (Windows). Default account `admin`/`splash123`; pass `-seed` for demo data. For production set `SPLASH_ADMIN_PASSWORD` and `SPLASH_AUTH_SECRET`.\n\nImages: `ghcr.io/%s:%s` (Linux) and `ghcr.io/%s-windows:%s` (Windows).\n' \
+            "$heading" "$commits" "${GITHUB_REPOSITORY,,}" "$VERSION" "${GITHUB_REPOSITORY,,}" "$VERSION")"
 
           # One immutable release per version. GitHub automatically badges the
           # newest non-prerelease release as "Latest"; there is deliberately NO

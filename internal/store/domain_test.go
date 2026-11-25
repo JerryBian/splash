@@ -187,20 +187,73 @@ func TestCategoryInputValidation(t *testing.T) {
 }
 
 func TestProjectQueryMatches(t *testing.T) {
-	public := Project{Name: "Water", Description: "eight cups a day"}
-	private := Project{Name: "Secret", Private: true}
+	water := Project{Name: "Water", Description: "eight cups a day"}
 	archived := Project{Name: "Old habit", Archived: true}
 
-	anon := ProjectQuery{VisibleOnly: true}
-	if !anon.Matches(public) || anon.Matches(private) || anon.Matches(archived) {
-		t.Error("anonymous query matched the wrong projects")
+	defaults := ProjectQuery{}
+	if !defaults.Matches(water) || defaults.Matches(archived) {
+		t.Error("default query should hide archived projects only")
 	}
-	admin := ProjectQuery{IncludeArchived: true}
-	if !admin.Matches(private) || !admin.Matches(archived) {
-		t.Error("admin query should see everything")
+	all := ProjectQuery{IncludeArchived: true}
+	if !all.Matches(water) || !all.Matches(archived) {
+		t.Error("IncludeArchived query should see everything")
 	}
 	search := ProjectQuery{Search: "eight cups"}
-	if !search.Matches(public) || search.Matches(private) {
+	if !search.Matches(water) || search.Matches(archived) {
 		t.Error("search should match description substrings")
+	}
+}
+
+func TestNatureValidationAndNormalization(t *testing.T) {
+	base := ProjectInput{Name: "Late nights", Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-01"}
+
+	// An unknown nature is a field problem.
+	bad := base
+	bad.Nature = "evil"
+	if err := bad.Validate("2026-11-21"); err == nil {
+		t.Error("unknown nature accepted")
+	}
+
+	// Bad habits cannot use the interval_hours countdown.
+	ih := base
+	ih.Nature = NatureBad
+	ih.Schedule = ScheduleIntervalHours
+	ih.Interval = 2
+	err := ih.Validate("2026-11-21")
+	var problems ValidationErrors
+	if !errors.As(err, &problems) {
+		t.Fatalf("bad + interval_hours: err = %v, want ValidationErrors", err)
+	}
+	found := false
+	for _, p := range problems {
+		if p.Field == "schedule" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("problems %v do not mention schedule", problems)
+	}
+
+	// A bad habit normalizes to check mode with target 1, whatever was sent.
+	badValue := base
+	badValue.Nature = NatureBad
+	badValue.Mode = ModeValue
+	badValue.Target = 5
+	badValue.Unit = "支"
+	n := badValue.Normalized()
+	if n.Nature != NatureBad || n.Mode != ModeCheck || n.Target != 1 || n.Unit != "次" {
+		t.Errorf("bad habit not normalized to check mode: %+v", n)
+	}
+
+	// The default nature is good.
+	if got := base.Normalized().Nature; got != NatureGood {
+		t.Errorf("default nature = %q, want good", got)
+	}
+
+	// Patching nature to bad on an interval_hours project is rejected.
+	current := Project{Schedule: ScheduleIntervalHours, Interval: 2, StartDate: "2026-11-01"}
+	patch := ProjectPatch{Nature: new(NatureBad)}
+	if err := patch.Validate(current, "2026-11-21"); err == nil {
+		t.Error("patch to bad on interval_hours accepted")
 	}
 }

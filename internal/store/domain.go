@@ -111,7 +111,36 @@ const (
 	ModeValue = "value"
 )
 
-// Project is one check-in habit: what to do, how often, and who may see it.
+// Nature distinguishes a habit to build from a habit to break. It flips the
+// meaning of a check-in and of every derived verdict:
+//
+//	good  a check-in is progress; meeting Target completes the period, an empty
+//	      ended period is missed, and a streak counts completed periods.
+//	bad   a check-in records a lapse ("I stayed up late"); ANY occurrence spoils
+//	      the period, a clean ended period is the success, and a streak counts
+//	      periods survived without a lapse. Bad habits are always check mode and
+//	      cannot use interval_hours (there is no obligation to record on a timer).
+//
+// The zero value normalizes to good, so existing rows and minimal payloads keep
+// their behaviour.
+const (
+	NatureGood = "good"
+	NatureBad  = "bad"
+)
+
+// ValidNature reports whether n is one of the supported natures ("" defaults to
+// good at normalization time).
+func ValidNature(n string) bool {
+	switch n {
+	case "", NatureGood, NatureBad:
+		return true
+	}
+	return false
+}
+
+// Project is one check-in habit: what to do (or avoid), and how often. Every
+// project is visible to the signed-in administrator; there is no anonymous
+// access and no per-project visibility flag.
 type Project struct {
 	ID          uuid.UUID    `json:"id"`
 	Name        string       `json:"name"`
@@ -119,10 +148,10 @@ type Project struct {
 	Icon        string       `json:"icon"`
 	Color       string       `json:"color"`
 	CategoryID  uuid.UUID    `json:"categoryId"` // uuid.Nil() means uncategorized
-	Private     bool         `json:"private"`    // hidden from anonymous visitors
+	Nature      string       `json:"nature"`     // NatureGood | NatureBad
 	Schedule    ScheduleType `json:"schedule"`
 	Mode        string       `json:"mode"`   // ModeCheck | ModeValue
-	Target      float64      `json:"target"` // units per period; unused by interval_hours
+	Target      float64      `json:"target"` // units per period; unused by interval_hours and by bad habits
 	Unit        string       `json:"unit"`   // UI-facing: "times", "cups", "minutes", "km"…
 	Weekdays    []int        `json:"weekdays"`
 	Interval    float64      `json:"interval"` // hours or days, per Schedule
@@ -148,7 +177,7 @@ type ProjectInput struct {
 	Icon        string       `json:"icon"`
 	Color       string       `json:"color"`
 	CategoryID  string       `json:"categoryId"` // "" or a UUID
-	Private     bool         `json:"private"`
+	Nature      string       `json:"nature"`
 	Schedule    ScheduleType `json:"schedule"`
 	Mode        string       `json:"mode"`
 	Target      float64      `json:"target"`
@@ -169,8 +198,10 @@ func (in ProjectInput) Validate(today string) error {
 		validateIcon(in.Icon),
 		validateColor(in.Color),
 		validateCategoryID(in.CategoryID),
+		validateNature(in.Nature),
 		validateMode(in.Mode),
 		validateSchedule(in.Schedule, in.Target, in.Unit, in.Weekdays, in.Interval),
+		validateNatureSchedule(in.Nature, in.Schedule),
 		validateStartDate(in.StartDate, today),
 		validatePrerequisites(in.Prerequisites, uuid.Nil()),
 	}
@@ -185,10 +216,16 @@ func (in ProjectInput) Normalized() ProjectInput {
 	out.Icon = orDefault(strings.TrimSpace(in.Icon), "✅")
 	out.Color = orDefault(strings.TrimSpace(in.Color), "blue")
 	out.CategoryID = strings.TrimSpace(in.CategoryID)
+	out.Nature = orDefault(strings.TrimSpace(in.Nature), NatureGood)
 	out.Mode = orDefault(strings.TrimSpace(in.Mode), ModeValue)
 	out.Unit = orDefault(strings.TrimSpace(in.Unit), "次")
 	out.StartDate = strings.TrimSpace(in.StartDate)
 	out.Prerequisites = normalizePrerequisites(in.Prerequisites)
+	// A bad habit records whether the lapse happened, never a quantity toward a
+	// target, so it is always check mode (which forces Target to 1 below).
+	if out.Nature == NatureBad {
+		out.Mode = ModeCheck
+	}
 	if out.Mode == ModeCheck {
 		out.Target = 1
 		out.Unit = "次"
@@ -215,7 +252,7 @@ type ProjectPatch struct {
 	Icon        *string       `json:"icon,omitempty"`
 	Color       *string       `json:"color,omitempty"`
 	CategoryID  *string       `json:"categoryId,omitempty"`
-	Private     *bool         `json:"private,omitempty"`
+	Nature      *string       `json:"nature,omitempty"`
 	Schedule    *ScheduleType `json:"schedule,omitempty"`
 	Mode        *string       `json:"mode,omitempty"`
 	Target      *float64      `json:"target,omitempty"`
@@ -231,7 +268,7 @@ type ProjectPatch struct {
 // Empty reports whether the patch would change nothing.
 func (p ProjectPatch) Empty() bool {
 	return p.Name == nil && p.Description == nil && p.Icon == nil && p.Color == nil &&
-		p.CategoryID == nil && p.Private == nil && p.Schedule == nil && p.Mode == nil && p.Target == nil &&
+		p.CategoryID == nil && p.Nature == nil && p.Schedule == nil && p.Mode == nil && p.Target == nil &&
 		p.Unit == nil && p.Weekdays == nil && p.Interval == nil && p.StartDate == nil && p.Archived == nil &&
 		p.Prerequisites == nil
 }
@@ -262,11 +299,17 @@ func (p ProjectPatch) Validate(current Project, today string) error {
 	if p.CategoryID != nil {
 		problems = append(problems, validateCategoryID(*p.CategoryID))
 	}
+	if p.Nature != nil {
+		problems = append(problems, validateNature(*p.Nature))
+	}
 	if p.Mode != nil {
 		problems = append(problems, validateMode(*p.Mode))
 	}
 	if p.Schedule != nil || p.Target != nil || p.Unit != nil || p.Weekdays != nil || p.Interval != nil || p.Mode != nil {
 		problems = append(problems, validateSchedule(merged.Schedule, merged.Target, merged.Unit, merged.Weekdays, merged.Interval))
+	}
+	if p.Nature != nil || p.Schedule != nil {
+		problems = append(problems, validateNatureSchedule(merged.Nature, merged.Schedule))
 	}
 	if p.StartDate != nil {
 		problems = append(problems, validateStartDate(*p.StartDate, today))
@@ -300,8 +343,8 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 		}
 		project.CategoryID = id
 	}
-	if p.Private != nil {
-		project.Private = *p.Private
+	if p.Nature != nil {
+		project.Nature = orDefault(strings.TrimSpace(*p.Nature), NatureGood)
 	}
 	if p.Schedule != nil {
 		project.Schedule = *p.Schedule
@@ -331,6 +374,9 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 		project.Prerequisites = parsePrerequisites(*p.Prerequisites)
 	}
 	// Keep the invariants that Normalized enforces on create.
+	if project.Nature == NatureBad {
+		project.Mode = ModeCheck
+	}
 	if project.Mode == ModeCheck {
 		project.Target = 1
 		project.Unit = "次"
@@ -350,6 +396,23 @@ func validateMode(raw string) *FieldError {
 	m := strings.TrimSpace(raw)
 	if m != "" && m != ModeCheck && m != ModeValue {
 		return &FieldError{Field: "mode", Message: "must be one of check, value"}
+	}
+	return nil
+}
+
+func validateNature(raw string) *FieldError {
+	if !ValidNature(strings.TrimSpace(raw)) {
+		return &FieldError{Field: "nature", Message: "must be one of good, bad"}
+	}
+	return nil
+}
+
+// validateNatureSchedule rejects the one combination that has no honest
+// meaning: a habit to avoid cannot carry a "check in every N hours" obligation,
+// because there is nothing to record until a lapse happens.
+func validateNatureSchedule(nature string, s ScheduleType) *FieldError {
+	if strings.TrimSpace(nature) == NatureBad && s == ScheduleIntervalHours {
+		return &FieldError{Field: "schedule", Message: "interval_hours is not supported for bad habits"}
 	}
 	return nil
 }
@@ -510,12 +573,11 @@ func (in SkipInput) Normalized() SkipInput {
 	return SkipInput{Date: strings.TrimSpace(in.Date), Reason: strings.TrimSpace(in.Reason)}
 }
 
-// ProjectQuery filters a project listing. Visibility is enforced here rather
-// than in handlers so no code path can forget it.
+// ProjectQuery filters a project listing. Every project belongs to the one
+// administrator, so there is no visibility predicate — only archive, category
+// and search filters.
 type ProjectQuery struct {
-	// VisibleOnly hides private projects (anonymous visitors).
-	VisibleOnly bool
-	// IncludeArchived keeps archived projects in the result (admin only).
+	// IncludeArchived keeps archived projects in the result.
 	IncludeArchived bool
 	// CategoryID, when set, keeps only projects in that category.
 	CategoryID string
@@ -527,9 +589,6 @@ type ProjectQuery struct {
 // predicates into the WHERE clause; this is the in-memory twin used by tests
 // and by the overview's category roll-up.
 func (q ProjectQuery) Matches(p Project) bool {
-	if q.VisibleOnly && p.Private {
-		return false
-	}
 	if !q.IncludeArchived && p.Archived {
 		return false
 	}

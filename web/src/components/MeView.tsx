@@ -1,11 +1,10 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { api } from '../api/client'
-import type { Health, VersionInfo } from '../api/types'
+import type { ExportData, Health, VersionInfo } from '../api/types'
 import type { ThemeChoice } from '../lib/theme'
 import { useApp } from '../hooks/useApp'
-import { navigate } from '../hooks/useNow'
 import { describeError } from '../lib/errors'
-import { DownloadIcon, LogInIcon, LogOutIcon, MonitorIcon, MoonIcon, SealMark, SunIcon, UserIcon } from './icons'
+import { DownloadIcon, LogOutIcon, MonitorIcon, MoonIcon, SealMark, SunIcon, UploadIcon } from './icons'
 import { ServicePanel } from './ServicePanel'
 import { Button, Segmented } from './ui'
 
@@ -16,20 +15,50 @@ const THEME_OPTIONS: { value: ThemeChoice; label: ReactNode }[] = [
 ]
 
 /**
- * The "me" page: session, appearance, diagnostics and backup. Anonymous
- * visitors get the login door; the admin gets everything else.
+ * The "me" page: account, appearance, diagnostics and backup. The whole app
+ * sits behind the administrator login, so this is always the admin's own
+ * account — signing out returns to the login gate.
  */
 export function MeView() {
-  const { session, isAdmin, projects, theme, setTheme, refreshSession, toast } = useApp()
+  const { session, projects, theme, setTheme, logout, refresh, toast } = useApp()
   const [diagnostics, setDiagnostics] = useState<{ health: Health; version: VersionInfo } | null>(null)
   const [diagOpen, setDiagOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
 
-  const logout = async () => {
+  const onImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    // Reset so picking the same file again still fires onChange.
+    event.target.value = ''
+    if (!file) return
+    setImporting(true)
+    try {
+      const text = await file.text()
+      let data: ExportData
+      try {
+        data = JSON.parse(text) as ExportData
+      } catch {
+        toast('这个文件不是有效的 JSON 备份', 'error')
+        return
+      }
+      const counts = await api.importData(data)
+      toast(
+        `导入完成：项目 ${counts.projects} · 打卡 ${counts.checkins} · 分类 ${counts.categories} · 跳过 ${counts.skips}`,
+        'ok',
+      )
+      await refresh()
+    } catch (error) {
+      toast(describeError(error), 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const signOut = async () => {
     setBusy(true)
     try {
-      await api.logout()
-      await refreshSession()
+      await logout()
       toast('已退出登录', 'info')
     } catch (error) {
       toast(describeError(error), 'error')
@@ -55,22 +84,16 @@ export function MeView() {
       <h1 className="view-title">我的</h1>
 
       <section className="me-card" aria-label="账户">
-        <span className="me-avatar" data-admin={isAdmin ? 'true' : undefined}>
-          {isAdmin ? <SealMark size={30} /> : <UserIcon size={26} />}
+        <span className="me-avatar" data-admin="true">
+          <SealMark size={30} />
         </span>
         <div className="me-id">
-          <strong>{isAdmin ? (session.username ?? 'admin') : '匿名访客'}</strong>
-          <span>{isAdmin ? '管理员 · 可打卡与管理' : '仅浏览公开项目'}</span>
+          <strong>{session.username ?? 'admin'}</strong>
+          <span>管理员 · 可打卡与管理</span>
         </div>
-        {isAdmin ? (
-          <Button variant="ghost" pending={busy} onClick={() => void logout()}>
-            <LogOutIcon size={15} /> 退出
-          </Button>
-        ) : (
-          <Button onClick={() => navigate('#login')}>
-            <LogInIcon size={15} /> 登录
-          </Button>
-        )}
+        <Button variant="ghost" pending={busy} onClick={() => void signOut()}>
+          <LogOutIcon size={15} /> 退出
+        </Button>
       </section>
 
       <section className="detail-section panel chart-panel" aria-label="外观">
@@ -83,15 +106,27 @@ export function MeView() {
         />
       </section>
 
-      {isAdmin ? (
-        <section className="detail-section panel chart-panel" aria-label="数据">
-          <h2 className="section-head">数据</h2>
-          <p className="sheet-note">导出全部分类、项目、打卡与跳过记录（JSON）。数据保存在服务器 SQLite 中。</p>
+      <section className="detail-section panel chart-panel" aria-label="数据">
+        <h2 className="section-head">数据</h2>
+        <p className="sheet-note">
+          导出全部分类、项目、打卡与跳过记录（JSON）。导入按 ID 合并，不会覆盖现有数据，重复导入同一份备份不会新增。数据保存在服务器 SQLite 中。
+        </p>
+        <div className="data-actions">
           <a className="button" data-variant="soft" href={api.exportUrl} download="splash-export.json">
             <DownloadIcon size={15} /> 导出备份
           </a>
-        </section>
-      ) : null}
+          <Button variant="soft" pending={importing} onClick={() => fileRef.current?.click()}>
+            <UploadIcon size={15} /> 导入备份
+          </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={(event) => void onImportFile(event)}
+          />
+        </div>
+      </section>
 
       <section className="detail-section panel chart-panel" aria-label="诊断">
         <details

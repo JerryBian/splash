@@ -216,7 +216,7 @@ Write-Host ''
 Write-Host '  OK splash is ready' -ForegroundColor Green
 Write-Host "     URL:      $base (browser opened)"
 Write-Host "     Account:  $username / $password"
-Write-Host "     Demo data: $projectCount public projects + ~120 days of history (private ones visible after login)"
+Write-Host "     Demo data: $projectCount projects (good + bad habits) + ~120 days of history; sign in to see them"
 Write-Host "     Database: $DbPath"
 Write-Host '     Stop:     close the server window, or Stop-Process -Id ' -NoNewline
 Write-Host "$($proc.Id)" -ForegroundColor Yellow

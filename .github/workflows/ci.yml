@@ -207,8 +207,10 @@ jobs:
             -H 'Content-Type: application/json' -d '{"value":1}' | grep -q '"value":1'
           curl -fsS "$base/api/v1/projects/$id/stats" -b /tmp/splash-cookies | grep -q '"status":"done"'
 
-          echo "--- anonymous sees the public project ---"
-          curl -fsS "$base/api/v1/projects" | grep -q 'ci smoke'
+          echo "--- anonymous reads are refused too ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/v1/projects")
+          test "$code" = "401" || { echo "expected 401 for anonymous read, got $code"; exit 1; }
+          curl -fsS "$base/api/v1/projects" -b /tmp/splash-cookies | grep -q 'ci smoke'
 
           echo "--- errors are JSON, not HTML ---"
           code=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/v1/does-not-exist")

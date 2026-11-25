@@ -380,3 +380,140 @@ func TestCompletionRate(t *testing.T) {
 		t.Errorf("completionRate = %v, want 0.75", got.Totals.CompletionRate)
 	}
 }
+
+// badProject is a daily habit to avoid: a check-in is a lapse, and the goal is
+// a clean period. Target is forced to 1 by normalization but is unused here.
+func badProject(start string) Project {
+	p := dailyProject(start, 1)
+	p.Nature = NatureBad
+	p.Mode = ModeCheck
+	return p
+}
+
+func TestBadHabitStreaksAreAbstention(t *testing.T) {
+	tests := []struct {
+		name       string
+		start      string
+		lapses     map[string]DayAggregate
+		skips      map[string]string
+		wantStatus string
+		wantStreak int
+		wantBest   int
+		wantDone   int
+		wantMissed int
+		wantSkip   int
+	}{
+		{
+			// Clean every ended day; today is clean so far → done, but the open
+			// day does not extend the run of survived periods.
+			name: "clean run, today held", start: "2026-11-18",
+			wantStatus: StatusDone, wantStreak: 3, wantBest: 3, wantDone: 3,
+		},
+		{
+			// A lapse yesterday breaks the run; today clean starts a new one
+			// only once it ends, so the current streak is 0.
+			name: "a lapse resets the run", start: "2026-11-18",
+			lapses:     agg(map[string]float64{"2026-11-20": 1}),
+			wantStatus: StatusDone, wantStreak: 0, wantBest: 2, wantDone: 2, wantMissed: 1,
+		},
+		{
+			// A lapse today is terminal immediately: missed, streak reset.
+			name: "lapse today spoils today", start: "2026-11-19",
+			lapses:     agg(map[string]float64{"2026-11-21": 1}),
+			wantStatus: StatusMissed, wantStreak: 0, wantBest: 2, wantDone: 2, wantMissed: 1,
+		},
+		{
+			name: "skip preserves the run without extending it", start: "2026-11-17",
+			skips:      map[string]string{"2026-11-17": "rest"},
+			wantStatus: StatusDone, wantStreak: 3, wantBest: 3, wantDone: 3, wantSkip: 1,
+		},
+		{
+			name: "skipping today excuses today", start: "2026-11-20",
+			skips:      map[string]string{"2026-11-21": "sick"},
+			wantStatus: StatusSkipped, wantStreak: 1, wantBest: 1, wantDone: 1, wantSkip: 1,
+		},
+		{
+			name: "fresh bad project is held, not pending", start: testToday,
+			wantStatus: StatusDone, wantStreak: 0, wantBest: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := badProject(tt.start)
+			got := BuildStats(StatsInput{Project: p, Today: testToday, Now: testNow,
+				Aggregates: tt.lapses, Skips: tt.skips})
+			if got.Summary.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q", got.Summary.Status, tt.wantStatus)
+			}
+			if got.Summary.Streak != tt.wantStreak {
+				t.Errorf("streak = %d, want %d", got.Summary.Streak, tt.wantStreak)
+			}
+			if got.Summary.BestStreak != tt.wantBest {
+				t.Errorf("best = %d, want %d", got.Summary.BestStreak, tt.wantBest)
+			}
+			if got.Totals.Done != tt.wantDone || got.Totals.Missed != tt.wantMissed || got.Totals.Skipped != tt.wantSkip {
+				t.Errorf("done/missed/skipped = %d/%d/%d, want %d/%d/%d",
+					got.Totals.Done, got.Totals.Missed, got.Totals.Skipped, tt.wantDone, tt.wantMissed, tt.wantSkip)
+			}
+		})
+	}
+}
+
+func TestBadHabitHeatmapAndBars(t *testing.T) {
+	p := badProject("2026-11-15")
+	got := BuildStats(StatsInput{
+		Project: p, Today: testToday, Now: testNow, Weeks: 2,
+		Aggregates: agg(map[string]float64{"2026-11-18": 1}), // one lapse
+		Skips:      map[string]string{"2026-11-17": "rest"},
+	})
+	byDate := map[string]HeatCell{}
+	for _, c := range got.Heatmap {
+		byDate[c.Date] = c
+	}
+	want := map[string]string{
+		"2026-11-14": StatusNone,    // before start
+		"2026-11-15": StatusDone,    // clean past day fills
+		"2026-11-17": StatusSkipped, // excused
+		"2026-11-18": StatusMissed,  // lapse marks the day
+		"2026-11-20": StatusDone,    // clean
+		"2026-11-21": StatusDone,    // today, clean so far
+	}
+	for date, status := range want {
+		if cell, ok := byDate[date]; !ok {
+			t.Errorf("heatmap missing %s", date)
+		} else if cell.Status != status {
+			t.Errorf("heatmap[%s] = %q, want %q", date, cell.Status, status)
+		}
+	}
+	// The lapse day is a spoiled bar with no target line; clean days are done.
+	for _, bar := range got.Periods {
+		if bar.Target != 0 {
+			t.Errorf("bad bar target = %v, want 0 (no goal line)", bar.Target)
+		}
+		if bar.Start == "2026-11-18" && bar.Status != StatusMissed {
+			t.Errorf("lapse bar status = %q, want missed", bar.Status)
+		}
+	}
+}
+
+func TestBadHabitCompletionRateIsCleanRate(t *testing.T) {
+	p := badProject("2026-11-17")
+	got := BuildStats(StatsInput{Project: p, Today: testToday, Now: testNow,
+		Aggregates: agg(map[string]float64{"2026-11-18": 1})})
+	// 17, 19, 20 clean (ended); 18 lapsed; 21 open clean → 3/4 kept clean.
+	if got.Totals.CompletionRate != 0.75 {
+		t.Errorf("completionRate = %v, want 0.75", got.Totals.CompletionRate)
+	}
+}
+
+func TestBadPrerequisiteResolvedWhenClean(t *testing.T) {
+	p := badProject("2026-11-01")
+	// A clean day resolves the gate; a lapse does not.
+	if !PrereqSatisfied(p, "2026-11-20", nil, nil) {
+		t.Error("a clean day must satisfy a bad prerequisite")
+	}
+	lapsed := map[string]DayAggregate{"2026-11-20": {Count: 1, Value: 1}}
+	if PrereqSatisfied(p, "2026-11-20", lapsed, nil) {
+		t.Error("a lapse must not satisfy a bad prerequisite")
+	}
+}

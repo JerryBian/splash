@@ -53,3 +53,12 @@ func (l *Limiter) Allow(key string) bool {
 	w.count++
 	return w.count <= l.max
 }
+
+// Reset clears a key's budget. The login handler calls it after a successful
+// sign-in so a legitimate user's own successes never count toward the guess
+// limit, while a run of failed guesses still trips it.
+func (l *Limiter) Reset(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.hits, key)
+}

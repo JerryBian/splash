@@ -54,14 +54,15 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 		{in: ProjectInput{Name: "喝水", Description: "每天 8 杯水，少量多次。", Icon: "💧", Color: "blue", CategoryID: catIDs["健康"], Schedule: ScheduleDaily, Target: 8, Unit: "杯", StartDate: start}, today: "partial"},
 		{in: ProjectInput{Name: "冥想", Description: "10 分钟呼吸练习，开始一天。", Icon: "🧘", Color: "teal", CategoryID: catIDs["健康"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}, today: "done"},
 		{in: ProjectInput{Name: "晨跑", Description: "每周跑 3 次，每次 3 公里以上。", Icon: "🏃", Color: "green", CategoryID: catIDs["健康"], Schedule: ScheduleWeekly, Target: 3, Unit: "次", StartDate: start}},
-		{in: ProjectInput{Name: "力量训练", Description: "周一、三、五，推拉腿分化。", Icon: "🏋️", Color: "red", CategoryID: catIDs["健康"], Private: true, Schedule: ScheduleWeekdays, Mode: ModeCheck, Target: 1, Unit: "次", Weekdays: []int{1, 3, 5}, StartDate: start}},
+		{in: ProjectInput{Name: "力量训练", Description: "周一、三、五，推拉腿分化。", Icon: "🏋️", Color: "red", CategoryID: catIDs["健康"], Schedule: ScheduleWeekdays, Mode: ModeCheck, Target: 1, Unit: "次", Weekdays: []int{1, 3, 5}, StartDate: start}},
 		{in: ProjectInput{Name: "站立活动", Description: "每 2 小时起身活动一次，久坐提醒。", Icon: "🚶", Color: "yellow", CategoryID: catIDs["健康"], Schedule: ScheduleIntervalHours, Interval: 2, StartDate: start}},
 		{in: ProjectInput{Name: "阅读", Description: "每天 30 分钟，纸质书优先。", Icon: "📚", Color: "purple", CategoryID: catIDs["学习"], Schedule: ScheduleDaily, Target: 30, Unit: "分钟", StartDate: start}, today: "pending"},
-		{in: ProjectInput{Name: "背单词", Description: "每天 50 个，复习优先于新词。", Icon: "🧠", Color: "pink", CategoryID: catIDs["学习"], Private: true, Schedule: ScheduleDaily, Target: 50, Unit: "个", StartDate: start}, today: "done"},
+		{in: ProjectInput{Name: "背单词", Description: "每天 50 个，复习优先于新词。", Icon: "🧠", Color: "pink", CategoryID: catIDs["学习"], Schedule: ScheduleDaily, Target: 50, Unit: "个", StartDate: start}, today: "done"},
 		{in: ProjectInput{Name: "每周复盘", Description: "周日晚回顾本周，写三条收获。", Icon: "📝", Color: "orange", CategoryID: catIDs["学习"], Schedule: ScheduleWeekly, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 		{in: ProjectInput{Name: "记账", Description: "记录当天每一笔支出。", Icon: "💰", Color: "teal", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}, today: "pending"},
-		{in: ProjectInput{Name: "护肤", Description: "晚间护肤流程。", Icon: "🌙", Color: "pink", CategoryID: catIDs["生活"], Private: true, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
-		{in: ProjectInput{Name: "刷短视频", Description: "先读完书才允许刷；没读就刷会记一次前置违规。", Icon: "📱", Color: "orange", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}, today: "pending"},
+		{in: ProjectInput{Name: "护肤", Description: "晚间护肤流程。", Icon: "🌙", Color: "pink", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
+		{in: ProjectInput{Name: "熬夜", Description: "23 点后还没睡就记一次；坚持早睡才是目标。", Icon: "🦉", Color: "indigo", CategoryID: catIDs["生活"], Nature: NatureBad, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
+		{in: ProjectInput{Name: "刷短视频", Description: "坏习惯：先读完书才允许刷；没读就刷会记一次前置违规。", Icon: "📱", Color: "orange", CategoryID: catIDs["生活"], Nature: NatureBad, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 	}
 
 	notes := []string{"状态不错", "有点累，但完成了", "顺便听了播客", "和朋友一起", "差点忘了", "补上昨天落下的"}
@@ -176,6 +177,17 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 					return 0, err
 				}
 			default: // daily
+				if p.Nature == NatureBad {
+					// A bad habit's records are lapses: occasional, not the norm,
+					// and today stays clean so the demo shows a held streak.
+					if isToday || rng.Float64() > 0.22 {
+						continue
+					}
+					if err := insertCheckin(p.ID, date, 22+rng.Intn(2), rng.Intn(60), 1, pick(rng, notes, 0.3), pick(rng, moods, 0.3)); err != nil {
+						return 0, err
+					}
+					continue
+				}
 				if isToday {
 					switch demo.today {
 					case "pending":

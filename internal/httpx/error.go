@@ -15,6 +15,7 @@ const (
 	CodeConflict         = "conflict"
 	CodeValidationFailed = "validation_failed"
 	CodePayloadTooLarge  = "payload_too_large"
+	CodeUnsupportedMedia = "unsupported_media_type"
 	CodeMethodNotAllowed = "method_not_allowed"
 	CodePrecondition     = "precondition_failed"
 	CodeTimeout          = "timeout"

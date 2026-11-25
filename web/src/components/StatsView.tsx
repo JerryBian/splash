@@ -5,7 +5,7 @@ import { addDays, formatDayCN, parseDay } from '../lib/date'
 import { formatValue } from '../lib/format'
 import { Donut, Heatmap, ProgressRing, Sparkline, TrendBars } from './charts'
 import { AlertIcon, ChartIcon, CheckIcon, FlameIcon, LayersIcon, SealMark, TargetIcon, TrophyIcon } from './icons'
-import { EmptyState, RecordBadges, StatTile } from './ui'
+import { EmptyState, NatureBadge, RecordBadges, StatTile } from './ui'
 import type { HeatCell } from '../api/types'
 
 /**
@@ -16,7 +16,7 @@ import type { HeatCell } from '../api/types'
  * only the category donut uses entity inks, each with a labelled legend.
  */
 export function StatsView() {
-  const { overview, today, isAdmin, projects } = useApp()
+  const { overview, today, projects } = useApp()
 
   // Memoized so chart props keep stable identities across renders, and all
   // hooks stay above the early return below.
@@ -88,7 +88,7 @@ export function StatsView() {
         <EmptyState
           icon={<ChartIcon size={30} />}
           title="还没有可统计的项目"
-          message={isAdmin ? '创建项目并开始打卡后，这里会出现趋势和热力图。' : '公开项目出现后，这里会展示它们的统计。'}
+          message="创建项目并开始打卡后，这里会出现趋势和热力图。"
         />
       </div>
     )
@@ -113,6 +113,7 @@ export function StatsView() {
             {overview.today.pending > 0 ? `${overview.today.pending} 个待打卡` : '全部完成，漂亮'}
             {overview.today.skipped > 0 ? ` · ${overview.today.skipped} 个跳过` : ''}
             {overview.today.due > 0 ? ` · ${overview.today.due} 个到点` : ''}
+            {overview.today.slipped > 0 ? ` · ${overview.today.slipped} 个破戒` : ''}
           </span>
           <span className="stats-hero-date">{formatDayCN(today)}</span>
         </div>
@@ -123,17 +124,19 @@ export function StatsView() {
       </section>
 
       <section className="stat-grid" aria-label="总览">
-        <StatTile label="总打卡" value={overview.totals.checkins} icon={<CheckIcon size={14} />} sub="次" spark={last14} />
+        <StatTile label="总打卡" value={overview.totals.checkins} icon={<CheckIcon size={14} />} sub="好习惯 · 次" spark={last14} />
+        <StatTile label="本月打卡" value={overview.totals.monthCheckins} icon={<FlameIcon size={14} />} sub="好习惯 · 次" spark={monthSpark} />
         <StatTile label="最佳连续" value={overview.totals.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
         <StatTile label="活跃项目" value={overview.totals.activeProjects} icon={<LayersIcon size={14} />} sub="个" />
-        <StatTile label="本月打卡" value={overview.totals.monthCheckins} icon={<FlameIcon size={14} />} sub="次" spark={monthSpark} />
+        <StatTile label="破戒次数" value={overview.totals.slips} icon={<AlertIcon size={14} />} sub="坏习惯 · 次" />
+        <StatTile label="本月破戒" value={overview.totals.monthSlips} icon={<AlertIcon size={14} />} sub="坏习惯 · 次" />
       </section>
 
       <div className="stats-cols">
         <section className="panel chart-panel" aria-label="活动热力图">
           <h2 className="section-head">
             <ChartIcon size={15} /> 全部活动
-            <span className="section-hint">最近 8 周 · 每天打卡次数</span>
+            <span className="section-hint">最近 8 周 · 每天好习惯打卡</span>
           </h2>
           <div className="heat-layout">
             <Heatmap cells={activityCells} color="brand" dailyTarget={maxCount} unit=" 次" />
@@ -157,7 +160,7 @@ export function StatsView() {
         <section className="panel chart-panel" aria-label="每周趋势">
           <h2 className="section-head">
             <TargetIcon size={15} /> 每周趋势
-            <span className="section-hint">最近 8 周打卡次数</span>
+            <span className="section-hint">最近 8 周好习惯打卡</span>
           </h2>
           <TrendBars
             bars={trendBars}
@@ -176,7 +179,7 @@ export function StatsView() {
           <section className="panel chart-panel" aria-label="分类分布">
             <h2 className="section-head">
               <LayersIcon size={15} /> 分类分布
-              <span className="section-hint">最近 30 天</span>
+              <span className="section-hint">最近 30 天 · 好习惯</span>
             </h2>
             <div className="donut-row">
               <Donut slices={slices} centerLabel="次" />
@@ -216,8 +219,11 @@ export function StatsView() {
                     <span className="leader-icon" aria-hidden="true">
                       {leader.icon}
                     </span>
-                    <span className="leader-name">{leader.name}</span>
-                    <span className="leader-streak">
+                    <span className="leader-name">
+                      {leader.name}
+                      <NatureBadge nature={leader.nature} />
+                    </span>
+                    <span className="leader-streak" title={leader.nature === 'bad' ? `坚持 ${leader.streak} 个周期` : `连续 ${leader.streak} 个周期`}>
                       🔥 {leader.streak}
                       <span className="leader-best">最佳 {leader.bestStreak}</span>
                     </span>

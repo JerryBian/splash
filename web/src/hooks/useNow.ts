@@ -15,9 +15,10 @@ export function useNow(active: boolean, intervalMs = 1000): Date {
 }
 
 /**
- * Hash routing: #today, #stats, #manage, #me, #project/<id>, #edit/<id|new>,
- * #login. The hash gives the mobile back button real work to do — overlays
- * close on back instead of leaving the app.
+ * Hash routing: #today, #stats, #manage, #me, #project/<id>, #edit/<id|new>.
+ * The hash gives the mobile back button real work to do — overlays close on
+ * back instead of leaving the app. Login is a full-screen gate above the
+ * router, not a hash route.
  */
 export type Route =
   | { name: 'today' }
@@ -26,7 +27,6 @@ export type Route =
   | { name: 'me' }
   | { name: 'project'; id: string }
   | { name: 'edit'; id: string }
-  | { name: 'login' }
 
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#\/?/, '')
@@ -38,8 +38,6 @@ export function parseHash(hash: string): Route {
       return { name: 'manage' }
     case 'me':
       return { name: 'me' }
-    case 'login':
-      return { name: 'login' }
     case 'project':
       return param ? { name: 'project', id: param } : { name: 'today' }
     case 'edit':

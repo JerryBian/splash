@@ -5,10 +5,12 @@
 // belongs in internal/store (or a domain package beside it), because a rule
 // that lives in a handler can only be tested through HTTP.
 //
-// Access model: anonymous visitors read public projects; the administrator
-// (one account, credentials from configuration) reads everything and is the
-// only role that writes. A private project does not exist for an anonymous
-// request — 404, not 403, so its existence is not leaked.
+// Access model: the whole service sits behind one administrator account
+// (credentials from configuration). Every data route — reads included — is
+// wrapped by guard, which answers 401 before any work happens. Only the auth
+// door (login/logout/me) and the operational probes (health/ready/version) are
+// reachable without a session. There is no anonymous data access and no
+// per-project visibility: a project either exists for the admin or it does not.
 package api
 
 import (
@@ -43,6 +45,7 @@ type Deps struct {
 	Skips      store.SkipStore
 	Stats      store.StatsStore
 	Export     store.Exporter
+	Import     store.Importer
 	// Auth checks credentials, signs sessions and reads the request role.
 	Auth *auth.Authenticator
 	// LoginLimiter throttles login attempts per IP. Nil becomes a default
@@ -72,6 +75,7 @@ type API struct {
 	skips      store.SkipStore
 	stats      store.StatsStore
 	export     store.Exporter
+	importer   store.Importer
 	authn      *auth.Authenticator
 	limiter    *auth.Limiter
 	log        *slog.Logger
@@ -92,8 +96,8 @@ type API struct {
 // first request.
 func New(deps Deps) *API {
 	if deps.Categories == nil || deps.Projects == nil || deps.Checkins == nil ||
-		deps.Skips == nil || deps.Stats == nil || deps.Export == nil || deps.Auth == nil {
-		panic("api: Deps requires Categories, Projects, Checkins, Skips, Stats, Export and Auth")
+		deps.Skips == nil || deps.Stats == nil || deps.Export == nil || deps.Import == nil || deps.Auth == nil {
+		panic("api: Deps requires Categories, Projects, Checkins, Skips, Stats, Export, Import and Auth")
 	}
 	log := deps.Log
 	if log == nil {
@@ -126,6 +130,7 @@ func New(deps Deps) *API {
 		skips:      deps.Skips,
 		stats:      deps.Stats,
 		export:     deps.Export,
+		importer:   deps.Import,
 		authn:      deps.Auth,
 		limiter:    limiter,
 		log:        log,
@@ -144,36 +149,39 @@ func New(deps Deps) *API {
 // Go 1.22: the mux dispatches on method and returns 405 for a known path with an
 // unregistered method, and {id} is read back with r.PathValue("id").
 func (a *API) Register(mux *http.ServeMux) {
+	// Ungated: operational probes and the auth door itself.
 	a.addRoute(mux, "GET "+RoutePrefix+"/health", a.handleHealth)
 	a.addRoute(mux, "GET "+RoutePrefix+"/health/ready", a.handleReady)
 	a.addRoute(mux, "GET "+RoutePrefix+"/version", a.handleVersion)
-
 	a.addRoute(mux, "POST "+RoutePrefix+"/auth/login", a.handleLogin)
 	a.addRoute(mux, "POST "+RoutePrefix+"/auth/logout", a.handleLogout)
 	a.addRoute(mux, "GET "+RoutePrefix+"/auth/me", a.handleMe)
 
-	a.addRoute(mux, "GET "+RoutePrefix+"/categories", a.handleListCategories)
-	a.addRoute(mux, "POST "+RoutePrefix+"/categories", a.handleCreateCategory)
-	a.addRoute(mux, "PATCH "+RoutePrefix+"/categories/{id}", a.handleUpdateCategory)
-	a.addRoute(mux, "DELETE "+RoutePrefix+"/categories/{id}", a.handleDeleteCategory)
+	// Everything else is administrator-only, reads included. guard enforces it
+	// once at the edge so no handler can forget the check.
+	a.addRoute(mux, "GET "+RoutePrefix+"/categories", a.guard(a.handleListCategories))
+	a.addRoute(mux, "POST "+RoutePrefix+"/categories", a.guard(a.handleCreateCategory))
+	a.addRoute(mux, "PATCH "+RoutePrefix+"/categories/{id}", a.guard(a.handleUpdateCategory))
+	a.addRoute(mux, "DELETE "+RoutePrefix+"/categories/{id}", a.guard(a.handleDeleteCategory))
 
-	a.addRoute(mux, "GET "+RoutePrefix+"/projects", a.handleListProjects)
-	a.addRoute(mux, "POST "+RoutePrefix+"/projects", a.handleCreateProject)
-	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}", a.handleGetProject)
-	a.addRoute(mux, "PATCH "+RoutePrefix+"/projects/{id}", a.handleUpdateProject)
-	a.addRoute(mux, "DELETE "+RoutePrefix+"/projects/{id}", a.handleDeleteProject)
+	a.addRoute(mux, "GET "+RoutePrefix+"/projects", a.guard(a.handleListProjects))
+	a.addRoute(mux, "POST "+RoutePrefix+"/projects", a.guard(a.handleCreateProject))
+	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}", a.guard(a.handleGetProject))
+	a.addRoute(mux, "PATCH "+RoutePrefix+"/projects/{id}", a.guard(a.handleUpdateProject))
+	a.addRoute(mux, "DELETE "+RoutePrefix+"/projects/{id}", a.guard(a.handleDeleteProject))
 
-	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/checkins", a.handleListCheckins)
-	a.addRoute(mux, "POST "+RoutePrefix+"/projects/{id}/checkins", a.handleCreateCheckin)
-	a.addRoute(mux, "DELETE "+RoutePrefix+"/checkins/{id}", a.handleDeleteCheckin)
+	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/checkins", a.guard(a.handleListCheckins))
+	a.addRoute(mux, "POST "+RoutePrefix+"/projects/{id}/checkins", a.guard(a.handleCreateCheckin))
+	a.addRoute(mux, "DELETE "+RoutePrefix+"/checkins/{id}", a.guard(a.handleDeleteCheckin))
 
-	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/skips", a.handleListSkips)
-	a.addRoute(mux, "POST "+RoutePrefix+"/projects/{id}/skips", a.handleCreateSkip)
-	a.addRoute(mux, "DELETE "+RoutePrefix+"/projects/{id}/skips/{date}", a.handleDeleteSkip)
+	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/skips", a.guard(a.handleListSkips))
+	a.addRoute(mux, "POST "+RoutePrefix+"/projects/{id}/skips", a.guard(a.handleCreateSkip))
+	a.addRoute(mux, "DELETE "+RoutePrefix+"/projects/{id}/skips/{date}", a.guard(a.handleDeleteSkip))
 
-	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/stats", a.handleProjectStats)
-	a.addRoute(mux, "GET "+RoutePrefix+"/stats/overview", a.handleOverview)
-	a.addRoute(mux, "GET "+RoutePrefix+"/export", a.handleExport)
+	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/stats", a.guard(a.handleProjectStats))
+	a.addRoute(mux, "GET "+RoutePrefix+"/stats/overview", a.guard(a.handleOverview))
+	a.addRoute(mux, "GET "+RoutePrefix+"/export", a.guard(a.handleExport))
+	a.addRoute(mux, "POST "+RoutePrefix+"/import", a.guard(a.handleImport))
 
 	// Catch-all for the API subtree. Without it an unknown /api/... path would
 	// fall through to the frontend handler mounted at "/" and be answered with
@@ -275,8 +283,8 @@ func (a *API) write(w http.ResponseWriter, r *http.Request, status int, v any) {
 	}
 }
 
-// requireAdmin is the gate on every write. It answers 401 itself and returns
-// false, so handlers read `if !a.requireAdmin(w, r) { return }`.
+// requireAdmin answers 401 itself and returns false when the request is not
+// the administrator, so callers read `if !a.requireAdmin(w, r) { return }`.
 func (a *API) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if auth.IsAdmin(r.Context()) {
 		return true
@@ -286,18 +294,28 @@ func (a *API) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
-// visibleProject loads a project and enforces visibility: for an anonymous
-// request a private project is indistinguishable from a missing one.
-func (a *API) visibleProject(w http.ResponseWriter, r *http.Request) (store.Project, bool) {
+// guard wraps a data handler with the administrator gate. Register applies it
+// to every route except the auth door and the probes, so reads and writes are
+// protected by construction rather than by each handler remembering to check.
+func (a *API) guard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.requireAdmin(w, r) {
+			return
+		}
+		next(w, r)
+	}
+}
+
+// loadProject parses the path id and loads the project. Access is already
+// enforced by guard; this only turns a missing or malformed id into the right
+// error before any work happens.
+func (a *API) loadProject(w http.ResponseWriter, r *http.Request) (store.Project, bool) {
 	id, err := parseUUID(r.PathValue("id"), "project id")
 	if err != nil {
 		a.fail(w, r, err)
 		return store.Project{}, false
 	}
 	p, err := a.projects.Get(r.Context(), id)
-	if err == nil && !auth.IsAdmin(r.Context()) && p.Private {
-		err = store.ErrNotFound
-	}
 	if err != nil {
 		a.fail(w, r, err)
 		return store.Project{}, false

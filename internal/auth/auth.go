@@ -1,5 +1,8 @@
-// Package auth implements the two-role access model: one administrator
-// account (credentials from configuration) and anonymous visitors.
+// Package auth implements the session model for a single administrator
+// account (credentials from configuration). A request is either admin (a valid
+// session) or anonymous (none); the API edge rejects anonymous requests on
+// every data route, so "anonymous" is only ever the state of someone who has
+// not logged in yet, not a role that can read anything.
 //
 // Sessions are stateless HMAC-SHA256 signed tokens in the JWT compact form,
 // carried by an HttpOnly cookie or an Authorization: Bearer header. Stateless
@@ -200,7 +203,8 @@ const (
 
 // Middleware reads the session (cookie first, then Bearer header) and puts the
 // role on the request context. An absent or invalid token is not an error here:
-// the request proceeds as anonymous, and handlers that need admin say so.
+// the request proceeds as anonymous, and the API's guard rejects it on every
+// data route. Only the auth door and the probes run without a session.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		role, username := RoleAnonymous, ""

@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 
-	"github.com/JerryBian/splash/internal/auth"
 	"github.com/JerryBian/splash/internal/httpx"
 	"github.com/JerryBian/splash/internal/store"
 )
@@ -32,39 +31,18 @@ type listCategoriesResponse struct {
 	Categories []category `json:"categories"`
 }
 
-// handleListCategories serves GET /api/v1/categories.
-//
-// Anonymous visitors see only categories that hold at least one public
-// project: an empty category could otherwise hint at hidden work.
+// handleListCategories serves GET /api/v1/categories (administrator). Every
+// category is returned, empty ones included — there is no anonymous visitor to
+// hide unused categories from.
 func (a *API) handleListCategories(w http.ResponseWriter, r *http.Request) {
 	all, err := a.categories.List(r.Context())
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	if auth.IsAdmin(r.Context()) {
-		out := make([]category, len(all))
-		for i, c := range all {
-			out[i] = toCategory(c)
-		}
-		a.write(w, r, http.StatusOK, listCategoriesResponse{Categories: out})
-		return
-	}
-
-	visible, err := a.projects.List(r.Context(), store.ProjectQuery{VisibleOnly: true})
-	if err != nil {
-		a.fail(w, r, err)
-		return
-	}
-	used := map[string]bool{}
-	for _, p := range visible {
-		used[p.CategoryID.String()] = true
-	}
-	out := []category{}
-	for _, c := range all {
-		if used[c.ID.String()] {
-			out = append(out, toCategory(c))
-		}
+	out := make([]category, len(all))
+	for i, c := range all {
+		out[i] = toCategory(c)
 	}
 	a.write(w, r, http.StatusOK, listCategoriesResponse{Categories: out})
 }
@@ -79,9 +57,6 @@ type categoryRequest struct {
 
 // handleCreateCategory serves POST /api/v1/categories (admin).
 func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
 	req, err := httpx.DecodeJSON[categoryRequest](w, r, a.maxBody)
 	if err != nil {
 		a.fail(w, r, err)
@@ -100,9 +75,6 @@ func (a *API) handleCreateCategory(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateCategory serves PATCH /api/v1/categories/{id} (admin).
 func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
 	id, err := parseUUID(r.PathValue("id"), "category id")
 	if err != nil {
 		a.fail(w, r, err)
@@ -126,9 +98,6 @@ func (a *API) handleUpdateCategory(w http.ResponseWriter, r *http.Request) {
 // handleDeleteCategory serves DELETE /api/v1/categories/{id} (admin).
 // Projects in the category survive, uncategorized.
 func (a *API) handleDeleteCategory(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
 	id, err := parseUUID(r.PathValue("id"), "category id")
 	if err != nil {
 		a.fail(w, r, err)

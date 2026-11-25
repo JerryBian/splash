@@ -1,14 +1,14 @@
 import { Suspense, useMemo, useState, useTransition } from 'react'
 import { api } from '../api/client'
-import type { Project } from '../api/types'
+import type { Checkin, Project } from '../api/types'
 import { useApp } from '../hooks/useApp'
 import { useLoaded } from '../hooks/useLoaded'
 import { navigate } from '../hooks/useNow'
 import { fetchDay, invalidate } from '../lib/async'
-import { formatClock, formatDayCN, formatMonthShort, parseDay } from '../lib/date'
+import { addDays, formatClock, formatDayCN, formatMonthShort, parseDay } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatPercent, formatValue, periodLabel, progressLabel, scheduleLabel } from '../lib/format'
-import { dailyEquivalentTarget, STATUS_LABEL } from '../lib/schedule'
+import { dailyEquivalentTarget, isBad, statusLabel } from '../lib/schedule'
 import { CheckinSheet } from './CheckinSheet'
 import { Heatmap, TrendBars } from './charts'
 import {
@@ -16,6 +16,7 @@ import {
   ArchiveIcon,
   CheckIcon,
   ChevronLeftIcon,
+  ChevronRightIcon,
   ClockIcon,
   FlameIcon,
   LockIcon,
@@ -27,7 +28,7 @@ import {
   TrophyIcon,
 } from './icons'
 import { ConfirmDialog } from './overlays'
-import { Button, EmptyState, IconButton, RecordBadges, StatTile, VisibilityBadge } from './ui'
+import { Button, EmptyState, IconButton, NatureBadge, RecordBadges, StatTile } from './ui'
 
 /**
  * The project page: identity, the four numbers that matter, the stamp
@@ -47,17 +48,12 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
 }
 
 function DetailBody({ projectId }: { projectId: string }) {
-  const { projects, categories, today, isAdmin, refresh, toast } = useApp()
+  const { projects, categories, today, refresh, toast } = useApp()
   const [version, setVersion] = useState(0)
   const [, startTransition] = useTransition()
-  const [selectedDay, setSelectedDay] = useState<string | null>(null)
   const [sheetDate, setSheetDate] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [busy, setBusy] = useState(false)
-  // The API returns the latest page of history (30 records). Dumping all of
-  // them under the fold made the page three screens longer than the useful
-  // part; show a short recent list and let the reader opt into the rest.
-  const [showAllRecords, setShowAllRecords] = useState(false)
 
   const result = useLoaded(`stats:${projectId}:${today}:${version}`, () =>
     api.projectStats(projectId, { weeks: 26, date: today }),
@@ -72,6 +68,7 @@ function DetailBody({ projectId }: { projectId: string }) {
 
   const reload = () => {
     invalidate(`stats:${projectId}:`)
+    invalidate(`cal:${projectId}:`)
     invalidate(`day:${projectId}:`)
     startTransition(() => setVersion((v) => v + 1))
   }
@@ -100,6 +97,7 @@ function DetailBody({ projectId }: { projectId: string }) {
   const category = categories.find((c) => c.id === project.categoryId)
   const summary = stats.summary
   const isInterval = project.schedule === 'interval_hours'
+  const bad = isBad(project)
 
   const toggleArchive = async () => {
     setBusy(true)
@@ -138,7 +136,7 @@ function DetailBody({ projectId }: { projectId: string }) {
         <div className="detail-id">
           <h1 className="detail-name">
             {project.name}
-            <VisibilityBadge isPrivate={project.private} />
+            <NatureBadge nature={project.nature} />
           </h1>
           {project.description !== undefined && project.description !== '' ? (
             <p className="detail-desc">{project.description}</p>
@@ -161,7 +159,7 @@ function DetailBody({ projectId }: { projectId: string }) {
       <section className="detail-now" aria-label="当前进度">
         <div className="detail-now-head">
           <span className="detail-status" data-status={summary.status}>
-            {STATUS_LABEL[summary.status]}
+            {statusLabel(summary.status, project.nature)}
           </span>
           <span className="detail-period">
             {isInterval
@@ -173,9 +171,11 @@ function DetailBody({ projectId }: { projectId: string }) {
         </div>
         {!isInterval ? (
           <div className="detail-progress">
-            <span className="bar bar-big">
-              <span className="bar-fill" style={barStyle} />
-            </span>
+            {bad ? null : (
+              <span className="bar bar-big">
+                <span className="bar-fill" style={barStyle} />
+              </span>
+            )}
             <span className="detail-progress-text">{progressLabel(project, summary.value, summary.target)}</span>
           </div>
         ) : (
@@ -184,40 +184,18 @@ function DetailBody({ projectId }: { projectId: string }) {
             {summary.lastCheckinAt !== undefined ? ` · 上次 ${formatClock(summary.lastCheckinAt)}` : ''}
           </p>
         )}
-        {isAdmin ? (
-          <Button onClick={() => setSheetDate(today)}>
-            <PlusIcon size={15} /> 打卡 / 补卡
-          </Button>
-        ) : null}
+        <Button onClick={() => setSheetDate(today)}>
+          <PlusIcon size={15} /> {bad ? '记录 / 补卡' : '打卡 / 补卡'}
+        </Button>
       </section>
 
-      <section className="detail-section detail-heat panel chart-panel" aria-label="打卡日历">
-        <h2 className="section-head">
-          <ClockIcon size={15} /> 打卡日历
-          <span className="section-hint">点按某天可查看、跳过或补卡</span>
-        </h2>
-        <Heatmap
-          cells={stats.heatmap}
-          color={project.color}
-          dailyTarget={dailyEquivalentTarget(project)}
-          unit={project.unit}
-          selected={selectedDay ?? undefined}
-          onSelect={(day) => setSelectedDay((current) => (current === day ? null : day))}
-        />
-        {selectedDay !== null ? (
-          <Suspense fallback={<div className="day-panel"><p className="sheet-note">读取中…</p></div>}>
-            <DayPanel
-              project={project}
-              day={selectedDay}
-              version={version}
-              isAdmin={isAdmin}
-              statusLabel={STATUS_LABEL[stats.heatmap.find((c) => c.date === selectedDay)?.status ?? 'none']}
-              onBackfill={() => setSheetDate(selectedDay)}
-              onChanged={afterMutation}
-            />
-          </Suspense>
-        ) : null}
-      </section>
+      <HistoryCalendar
+        project={project}
+        today={today}
+        version={version}
+        onBackfill={(day) => setSheetDate(day)}
+        onChanged={afterMutation}
+      />
 
       <section className="detail-section detail-trend panel chart-panel" aria-label="趋势">
         <h2 className="section-head">
@@ -228,6 +206,7 @@ function DetailBody({ projectId }: { projectId: string }) {
           bars={stats.periods}
           color={project.color}
           unit={isInterval ? '次' : project.unit}
+          nature={project.nature}
           labelFor={(bar) => {
             if (project.schedule === 'monthly') return formatMonthShort(bar.start)
             const d = parseDay(bar.start)
@@ -241,19 +220,25 @@ function DetailBody({ projectId }: { projectId: string }) {
       </div>
       <div className="detail-col-b">
       <section className="stat-grid" aria-label="统计">
-        <StatTile label="当前连续" value={summary.streak} icon={<FlameIcon size={14} />} sub="个周期" />
-        <StatTile label="最佳连续" value={summary.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
+        <StatTile label={bad ? '当前坚持' : '当前连续'} value={summary.streak} icon={<FlameIcon size={14} />} sub="个周期" />
+        <StatTile label={bad ? '最佳坚持' : '最佳连续'} value={summary.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
         <StatTile
-          label={isInterval ? '按时率' : '完成率'}
+          label={isInterval ? '按时率' : bad ? '守住率' : '完成率'}
           value={formatPercent(isInterval ? stats.totals.onTimeRate : stats.totals.completionRate)}
           icon={<TargetIcon size={14} />}
-          sub={isInterval ? `${stats.totals.lateCount} 次超时` : `${stats.totals.done} 完成 / ${stats.totals.missed} 缺失`}
+          sub={
+            isInterval
+              ? `${stats.totals.lateCount} 次超时`
+              : bad
+                ? `${stats.totals.done} 守住 / ${stats.totals.missed} 破戒`
+                : `${stats.totals.done} 完成 / ${stats.totals.missed} 缺失`
+          }
         />
         <StatTile
-          label="总打卡"
+          label={bad ? '破戒次数' : '总打卡'}
           value={stats.totals.checkins}
           icon={<CheckIcon size={14} />}
-          sub={`${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
+          sub={bad ? `${stats.totals.activeDays} 个破戒日 · ${stats.totals.backfilled} 补卡` : `${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
         />
       </section>
 
@@ -304,62 +289,19 @@ function DetailBody({ projectId }: { projectId: string }) {
         </section>
       ) : null}
 
-      <section className="detail-section detail-history panel chart-panel" aria-label="最近记录">
-        <h2 className="section-head">
-          <CheckIcon size={15} /> 最近记录
-          <span className="section-hint">最近 {stats.recent.length} 条</span>
-        </h2>
-        {stats.recent.length === 0 ? (
-          <p className="sheet-note">还没有记录，去盖下第一个印章吧。</p>
-        ) : (
-          <>
-            <ul className="record-list">
-              {(showAllRecords ? stats.recent : stats.recent.slice(0, 6)).map((record) => (
-                <li key={record.id} className="record">
-                  <span className="record-value">
-                    {formatValue(record.value)} {project.unit}
-                  </span>
-                  <span className="record-meta">
-                    {formatDayCN(record.localDate)} {formatClock(record.checkedAt)}
-                    {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
-                    {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
-                  </span>
-                  <RecordBadges backfilled={record.backfilled} violated={record.violated} />
-                  {isAdmin ? (
-                    <IconButton label="撤销这条记录" onClick={() => void removeRecent(record.id)}>
-                      <TrashIcon size={15} />
-                    </IconButton>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-            {stats.recent.length > 6 ? (
-              <button
-                type="button"
-                className="text-toggle"
-                aria-expanded={showAllRecords}
-                onClick={() => setShowAllRecords((open) => !open)}
-              >
-                {showAllRecords ? '收起记录' : `展开最近 ${stats.recent.length} 条`}
-              </button>
-            ) : null}
-          </>
-        )}
-      </section>
+      <HistoryList key={version} project={project} initial={stats.recent} onRemove={removeRecent} />
 
-      {isAdmin ? (
-        <footer className="detail-actions">
-          <Button variant="soft" onClick={() => navigate(`#edit/${project.id}`)}>
-            <PencilIcon size={15} /> 编辑
-          </Button>
-          <Button variant="ghost" pending={busy} onClick={() => void toggleArchive()}>
-            <ArchiveIcon size={15} /> {project.archived ? '恢复' : '归档'}
-          </Button>
-          <Button variant="danger" onClick={() => setConfirmDelete(true)}>
-            <TrashIcon size={15} /> 删除
-          </Button>
-        </footer>
-      ) : null}
+      <footer className="detail-actions">
+        <Button variant="soft" onClick={() => navigate(`#edit/${project.id}`)}>
+          <PencilIcon size={15} /> 编辑
+        </Button>
+        <Button variant="ghost" pending={busy} onClick={() => void toggleArchive()}>
+          <ArchiveIcon size={15} /> {project.archived ? '恢复' : '归档'}
+        </Button>
+        <Button variant="danger" onClick={() => setConfirmDelete(true)}>
+          <TrashIcon size={15} /> 删除
+        </Button>
+      </footer>
       </div>
       </div>
 
@@ -398,21 +340,238 @@ function DetailBody({ projectId }: { projectId: string }) {
   }
 }
 
+/**
+ * The stamp calendar with year navigation. The current view is a rolling year;
+ * stepping back fetches that calendar year's heatmap (the API computes weeks
+ * ending an as-of date), so years of history are reachable, not just the last
+ * few months. The year switch suspense is local so the rest of the page never
+ * flashes a skeleton. Each day stays tappable for records, skip and backfill.
+ */
+function HistoryCalendar({
+  project,
+  today,
+  version,
+  onBackfill,
+  onChanged,
+}: {
+  project: Project
+  today: string
+  version: number
+  onBackfill: (day: string) => void
+  onChanged: () => Promise<void>
+}) {
+  const currentYear = Number(today.slice(0, 4))
+  const startYear = Number(project.startDate.slice(0, 4))
+  const [year, setYear] = useState(currentYear)
+  const [selectedDay, setSelectedDay] = useState<string | null>(null)
+
+  const step = (next: number) => {
+    setYear(next)
+    setSelectedDay(null)
+  }
+
+  return (
+    <section className="detail-section detail-heat panel chart-panel" aria-label="打卡日历">
+      <h2 className="section-head">
+        <ClockIcon size={15} /> 打卡日历
+        <span className="section-hint">点按某天可查看、跳过或补卡</span>
+      </h2>
+      <div className="calendar-nav">
+        <IconButton label="上一年" disabled={year <= startYear} onClick={() => step(year - 1)}>
+          <ChevronLeftIcon />
+        </IconButton>
+        <span className="calendar-year" aria-live="polite">
+          {year >= currentYear ? `${currentYear} 年 · 至今` : `${year} 年`}
+        </span>
+        <IconButton label="下一年" disabled={year >= currentYear} onClick={() => step(year + 1)}>
+          <ChevronRightIcon />
+        </IconButton>
+      </div>
+      <Suspense fallback={<div className="calendar-loading"><span className="skeleton skeleton-heat" /></div>}>
+        <CalendarBody
+          key={year}
+          project={project}
+          today={today}
+          year={year}
+          version={version}
+          selectedDay={selectedDay}
+          onSelect={(day) => setSelectedDay((cur) => (cur === day ? null : day))}
+          onBackfill={onBackfill}
+          onChanged={onChanged}
+        />
+      </Suspense>
+    </section>
+  )
+}
+
+function CalendarBody({
+  project,
+  today,
+  year,
+  version,
+  selectedDay,
+  onSelect,
+  onBackfill,
+  onChanged,
+}: {
+  project: Project
+  today: string
+  year: number
+  version: number
+  selectedDay: string | null
+  onSelect: (day: string) => void
+  onBackfill: (day: string) => void
+  onChanged: () => Promise<void>
+}) {
+  const currentYear = Number(today.slice(0, 4))
+  // A past year is viewed as of its last day; the current year as of today.
+  const asOf = year >= currentYear ? today : `${year}-12-31`
+  const result = useLoaded(`cal:${project.id}:${year}:${version}`, () =>
+    api.projectStats(project.id, { weeks: 53, date: asOf }),
+  )
+  if (!result.ok) {
+    return <p className="sheet-note">{describeError(result.error)}</p>
+  }
+  const cells = result.data.heatmap
+  return (
+    <>
+      <Heatmap
+        cells={cells}
+        color={project.color}
+        dailyTarget={dailyEquivalentTarget(project)}
+        unit={project.unit}
+        nature={project.nature}
+        selected={selectedDay ?? undefined}
+        onSelect={onSelect}
+      />
+      {selectedDay !== null ? (
+        <Suspense fallback={<div className="day-panel"><p className="sheet-note">读取中…</p></div>}>
+          <DayPanel
+            project={project}
+            day={selectedDay}
+            version={version}
+            verdictLabel={statusLabel(cells.find((c) => c.date === selectedDay)?.status ?? 'none', project.nature)}
+            onBackfill={() => onBackfill(selectedDay)}
+            onChanged={onChanged}
+          />
+        </Suspense>
+      ) : null}
+    </>
+  )
+}
+
+/**
+ * The full record history, paginated backwards by local date. The first page
+ * comes from the stats response; "加载更早记录" walks older pages (deduping by
+ * id) so a habit with years of check-ins is fully browsable, not just the last
+ * thirty. Undo lives on every row.
+ */
+function HistoryList({
+  project,
+  initial,
+  onRemove,
+}: {
+  project: Project
+  initial: Checkin[]
+  onRemove: (id: string) => Promise<void>
+}) {
+  const [records, setRecords] = useState<Checkin[]>(initial)
+  const [cursor, setCursor] = useState<string | null>(
+    initial.length > 0 ? initial[initial.length - 1]!.localDate : null,
+  )
+  const [loading, setLoading] = useState(false)
+  const [done, setDone] = useState(initial.length < 30)
+  const [expanded, setExpanded] = useState(false)
+
+  const loadMore = async () => {
+    if (loading || cursor === null) return
+    setLoading(true)
+    try {
+      const page = await api.listCheckins(project.id, { to: cursor, limit: 50 })
+      setRecords((cur) => {
+        const seen = new Set(cur.map((r) => r.id))
+        return [...cur, ...page.filter((r) => !seen.has(r.id))]
+      })
+      if (page.length < 50) {
+        setDone(true)
+      } else {
+        setCursor(addDays(page[page.length - 1]!.localDate, -1))
+      }
+    } catch {
+      setDone(true)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const shown = expanded ? records : records.slice(0, 6)
+
+  return (
+    <section className="detail-section detail-history panel chart-panel" aria-label="记录历史">
+      <h2 className="section-head">
+        <CheckIcon size={15} /> 记录历史
+        <span className="section-hint">已加载 {records.length} 条</span>
+      </h2>
+      {records.length === 0 ? (
+        <p className="sheet-note">还没有记录，去盖下第一个印章吧。</p>
+      ) : (
+        <>
+          <ul className="record-list">
+            {shown.map((record) => (
+              <li key={record.id} className="record">
+                <span className="record-value">
+                  {formatValue(record.value)} {project.unit}
+                </span>
+                <span className="record-meta">
+                  {formatDayCN(record.localDate)} {formatClock(record.checkedAt)}
+                  {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
+                  {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
+                </span>
+                <RecordBadges backfilled={record.backfilled} violated={record.violated} />
+                <IconButton label="撤销这条记录" onClick={() => void onRemove(record.id)}>
+                  <TrashIcon size={15} />
+                </IconButton>
+              </li>
+            ))}
+          </ul>
+          <div className="history-controls">
+            {records.length > 6 ? (
+              <button
+                type="button"
+                className="text-toggle"
+                aria-expanded={expanded}
+                onClick={() => setExpanded((open) => !open)}
+              >
+                {expanded ? '收起' : `展开已加载 ${records.length} 条`}
+              </button>
+            ) : null}
+            {!done ? (
+              <Button variant="soft" pending={loading} onClick={() => void loadMore()}>
+                加载更早记录
+              </Button>
+            ) : (
+              <span className="sheet-note">已加载全部记录</span>
+            )}
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
 /** One heatmap day: records, skip toggle and backfill, from the shared cache. */
 function DayPanel({
   project,
   day,
   version,
-  isAdmin,
-  statusLabel,
+  verdictLabel,
   onBackfill,
   onChanged,
 }: {
   project: Project
   day: string
   version: number
-  isAdmin: boolean
-  statusLabel: string
+  verdictLabel: string
   onBackfill: () => void
   onChanged: () => Promise<void>
 }) {
@@ -461,7 +620,7 @@ function DayPanel({
     <div className="day-panel">
       <div className="day-panel-head">
         <strong>{formatDayCN(day)}</strong>
-        <span className="day-panel-status">{statusLabel}</span>
+        <span className="day-panel-status">{verdictLabel}</span>
       </div>
       {records.length === 0 ? (
         <p className="sheet-note">这一天没有记录。</p>
@@ -478,25 +637,21 @@ function DayPanel({
                 {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
               </span>
               <RecordBadges backfilled={record.backfilled} violated={record.violated} />
-              {isAdmin ? (
-                <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>
-                  <TrashIcon size={15} />
-                </IconButton>
-              ) : null}
+              <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>
+                <TrashIcon size={15} />
+              </IconButton>
             </li>
           ))}
         </ul>
       )}
-      {isAdmin ? (
-        <div className="day-panel-actions">
-          <Button variant="soft" onClick={onBackfill}>
-            <PlusIcon size={14} /> 补卡
-          </Button>
-          <Button variant="ghost" pending={busy} onClick={() => void toggleSkip()}>
-            <SkipIcon size={14} /> {skipped ? '取消跳过' : '跳过这一天'}
-          </Button>
-        </div>
-      ) : null}
+      <div className="day-panel-actions">
+        <Button variant="soft" onClick={onBackfill}>
+          <PlusIcon size={14} /> 补卡
+        </Button>
+        <Button variant="ghost" pending={busy} onClick={() => void toggleSkip()}>
+          <SkipIcon size={14} /> {skipped ? '取消跳过' : '跳过这一天'}
+        </Button>
+      </div>
     </div>
   )
 }

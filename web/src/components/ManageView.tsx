@@ -8,7 +8,6 @@ import { scheduleLabel } from '../lib/format'
 import {
   ArchiveIcon,
   LayersIcon,
-  LockIcon,
   PencilIcon,
   PlusIcon,
   SearchIcon,
@@ -18,7 +17,7 @@ import {
 } from './icons'
 import { CategoryManager } from './CategoryManager'
 import { ConfirmDialog } from './overlays'
-import { Button, Chip, EmptyState, IconButton, Input, Switch, VisibilityBadge } from './ui'
+import { Button, Chip, EmptyState, IconButton, Input, NatureBadge, Switch } from './ui'
 
 /**
  * The admin workshop: every project including archived ones, searchable and
@@ -27,7 +26,7 @@ import { Button, Chip, EmptyState, IconButton, Input, Switch, VisibilityBadge } 
  * long list.
  */
 export function ManageView() {
-  const { projects, categories, isAdmin, refresh, toast } = useApp()
+  const { projects, categories, refresh, toast } = useApp()
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [showArchived, setShowArchived] = useState(true)
@@ -53,20 +52,6 @@ export function ManageView() {
       )
     })
   }, [projects, deferredSearch, activeCategory, showArchived])
-
-  if (!isAdmin) {
-    return (
-      <div className="view">
-        <h1 className="view-title">管理</h1>
-        <EmptyState
-          icon={<LockIcon size={30} />}
-          title="需要管理员登录"
-          message="登录后可以创建、编辑和删除打卡项目与分类。"
-          action={<Button onClick={() => navigate('#login')}>登录</Button>}
-        />
-      </div>
-    )
-  }
 
   const toggleArchive = async (project: Project) => {
     try {
@@ -162,7 +147,7 @@ export function ManageView() {
                       {/* The name ellipsizes; badges keep their full shape so
                           the row stays one line even at 320px. */}
                       <span className="manage-project-name">{project.name}</span>
-                      <VisibilityBadge isPrivate={project.private} />
+                      <NatureBadge nature={project.nature} />
                       {project.archived ? <span className="mini-chip">已归档</span> : null}
                     </span>
                     <span className="manage-sub">

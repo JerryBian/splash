@@ -188,9 +188,32 @@ func TestDecodeJSONRejectsInvalidUTF8(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// A raw 0xFF byte inside a JSON string is not valid UTF-8.
 	req := httptest.NewRequest(http.MethodPost, "/items", strings.NewReader("{\"title\":\"bad\xff byte\"}"))
+	req.Header.Set("Content-Type", ContentTypeJSON)
 
 	if _, err := DecodeJSON[decodeTarget](rec, req, 1<<20); !IsMalformedJSON(err) {
 		t.Errorf("error = %v, want invalid UTF-8 to be rejected", err)
+	}
+}
+
+// TestDecodeJSONRequiresJSONContentType pins the CSRF hardening: a body that
+// is not declared application/json (e.g. a cross-site form POST) is rejected
+// before it is parsed.
+func TestDecodeJSONRequiresJSONContentType(t *testing.T) {
+	for _, ct := range []string{"", "text/plain", "application/x-www-form-urlencoded", "multipart/form-data"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/items", strings.NewReader(`{"title":"x"}`))
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		if _, err := DecodeJSON[decodeTarget](rec, req, 1<<20); !IsUnsupportedMediaType(err) {
+			t.Errorf("Content-Type %q: error = %v, want unsupported media type", ct, err)
+		}
+	}
+	// The charset parameter is fine.
+	rec, req := postRequest(t, `{"title":"x"}`)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	if _, err := DecodeJSON[decodeTarget](rec, req, 1<<20); err != nil {
+		t.Errorf("application/json; charset=utf-8 rejected: %v", err)
 	}
 }
 

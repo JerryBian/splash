@@ -23,13 +23,13 @@
 :root {
   color-scheme: light;
 
-  --paper: #f4f4f1;
-  --card: #fcfcfa;
-  --sunken: #ecede7;
-  --outer: #e7e8e2;
+  --paper: #f5f4f0;
+  --card: #fdfdfb;
+  --sunken: #eeece5;
+  --outer: #e9e7df;
   --ink-text: #232622;
   --muted: #6e736b;
-  --line: #e2e3dc;
+  --line: #e4e2d9;
 
   /* Celadon (青瓷) — calm, eye-friendly accent. The vivid inks belong to the
      data (projects/categories); the chrome stays quiet. Red survives only as
@@ -280,25 +280,6 @@ code {
   border-radius: 999px;
 }
 
-.topbar-login {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--muted);
-  background: none;
-  border: 1px solid var(--line);
-  padding: 5px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.topbar-login:hover {
-  color: var(--brand);
-  border-color: color-mix(in oklab, var(--brand) 40%, var(--line));
-}
-
 .app-main {
   /* Keep the last card clear of both the bottom navigation and the FAB. */
   padding: 14px var(--gutter) calc(var(--nav-height) + 92px + env(safe-area-inset-bottom, 0px));
@@ -374,6 +355,7 @@ code {
 /* ------------------------------------------------------------------ today */
 
 .today-head {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr auto;
   grid-template-areas:
@@ -381,7 +363,31 @@ code {
     'week week';
   align-items: end;
   gap: 14px 12px;
-  margin: 2px 0 14px;
+  margin: 2px 0 10px;
+}
+
+/* A faint brand seal behind the header: personality without layout weight. */
+.today-watermark {
+  position: absolute;
+  top: -28px;
+  right: -6px;
+  color: var(--brand);
+  opacity: 0.06;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.today-date,
+.today-ring,
+.week-strip {
+  position: relative;
+  z-index: 1;
+}
+
+.today-greeting {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0 0 12px;
 }
 
 .today-date {
@@ -523,26 +529,6 @@ code {
   font-size: 11.5px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
-}
-
-.anon-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: color-mix(in oklab, var(--brand) 7%, var(--card));
-  border: 1px solid color-mix(in oklab, var(--brand) 22%, var(--line));
-  border-radius: 14px;
-  padding: 10px 12px;
-  font-size: 12.5px;
-  margin-bottom: 12px;
-  color: var(--muted);
-}
-
-.anon-banner .button {
-  margin-left: auto;
-  flex: none;
-  padding: 6px 12px;
-  font-size: 12.5px;
 }
 
 .chip-row {
@@ -778,14 +764,6 @@ code {
   white-space: nowrap;
 }
 
-.card-readonly {
-  flex: none;
-  align-self: center;
-  margin-right: 14px;
-  display: grid;
-  place-items: center;
-}
-
 /* The stamp: an empty dashed circle waits; a tap presses the seal. */
 .stamp {
   flex: none;
@@ -849,6 +827,33 @@ code {
 .stamp:has(.stamp-rest) {
   border-color: var(--line);
   border-style: solid;
+}
+
+/* A bad habit held clean: a calm 守 mark instead of a celebratory seal. */
+.stamp-held {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stamp:has(.stamp-held) {
+  border-style: solid;
+  border-color: color-mix(in oklab, var(--ink) 45%, var(--line));
+}
+
+/* A recorded lapse: the seal turns to an × in the error tone. */
+.seal[data-lapsed='true'] {
+  border-color: var(--error);
+  color: var(--error);
+  background: color-mix(in oklab, var(--error) 8%, var(--card));
+}
+
+.seal[data-lapsed='true']::after {
+  border-color: color-mix(in oklab, var(--error) 50%, transparent);
+}
+
+.stamp[data-lapsed='true'] {
+  border-color: transparent;
 }
 
 .stamp-count {
@@ -1848,6 +1853,11 @@ button.heat-cell:hover {
   box-shadow: inset 0 0 0 1.5px var(--ink);
 }
 
+/* Bad-habit legend: a fully kept day fills with the ink. */
+.legend-cell[data-level='4'] {
+  background: var(--ink);
+}
+
 /* ------------------------------------------------------------------ trend */
 
 .trend-plot {
@@ -2055,6 +2065,51 @@ button.heat-cell:hover {
 .detail-period {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Year navigation above the stamp calendar: step back through years of
+   history without leaving the page. */
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 2px 0 10px;
+}
+
+.calendar-year {
+  font-family: var(--display);
+  font-size: 13.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 110px;
+  text-align: center;
+  color: var(--ink-text);
+}
+
+.calendar-nav .icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.calendar-loading {
+  padding: 8px 0;
+}
+
+.history-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
 }
 
 .detail-progress {
@@ -2486,8 +2541,9 @@ button.heat-cell:hover {
   flex-wrap: wrap;
 }
 
-/* Visibility badge: icon + word so public/private is never a guess. */
-.vis-badge {
+/* Nature badge: marks a habit to break. Icon + word, never color alone; good
+   habits are the unmarked default, so only bad habits wear the badge. */
+.nature-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -2496,11 +2552,6 @@ button.heat-cell:hover {
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 999px;
-  background: var(--sunken);
-  color: var(--muted);
-}
-
-.vis-badge[data-private='true'] {
   background: color-mix(in oklab, var(--warn) 12%, var(--card));
   color: var(--warn);
 }
@@ -2803,7 +2854,7 @@ button.heat-cell:hover {
   text-overflow: ellipsis;
 }
 
-.manage-name > .vis-badge,
+.manage-name > .nature-badge,
 .manage-name > .mini-chip {
   flex: none;
 }
@@ -3243,6 +3294,27 @@ button.heat-cell:hover {
   margin-top: 6px;
 }
 
+/* The login gate is the whole screen when signed out: a centered panel on the
+   rice-paper background, the same shell the boot failure uses. */
+.login-gate {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.login-gate .boot-panel {
+  width: 100%;
+  max-width: 380px;
+  margin-inline: auto;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
 /* ------------------------------------------------------------------- boot */
 
 .boot {
@@ -3504,11 +3576,6 @@ button.heat-cell:hover {
   }
 
   .sidebar-foot .topbar-role,
-  .sidebar-foot .topbar-login {
-    width: 100%;
-    justify-content: center;
-  }
-
   .app-body {
     min-width: 0;
     min-height: 100dvh;
@@ -3614,6 +3681,12 @@ button.heat-cell:hover {
   /* Stats: tiles across, chart pairs side by side. */
   .view > .stat-grid {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  /* The overview carries six tiles (good progress + bad lapses): three across
+     keeps two tidy rows instead of a stretched orphan. */
+  .view.stats > .stat-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .stats-cols {

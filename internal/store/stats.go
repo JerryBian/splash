@@ -21,29 +21,38 @@ type Stats struct{ db *DB }
 
 var _ StatsStore = (*Stats)(nil)
 
-// TodayCounters is the headline of the Today page.
+// TodayCounters is the headline of the Today page. Done counts both good
+// habits completed and bad habits kept clean; Slipped counts bad habits that
+// recorded a lapse today, so the two kinds of success and failure stay legible.
 type TodayCounters struct {
 	Date    string `json:"date"`
 	Total   int    `json:"total"` // projects with an obligation today (rest days excluded)
 	Done    int    `json:"done"`
 	Pending int    `json:"pending"` // pending + partial + waiting
 	Skipped int    `json:"skipped"`
-	Due     int    `json:"due"` // interval_hours countdowns that elapsed
+	Due     int    `json:"due"`     // interval_hours countdowns that elapsed
+	Slipped int    `json:"slipped"` // bad habits with a lapse today
 }
 
-// OverviewTotals are the lifetime stat tiles.
+// OverviewTotals are the lifetime stat tiles. Checkins/MonthCheckins count
+// good-habit progress only; Slips/MonthSlips count bad-habit lapses, so a slip
+// never inflates the "total check-ins" achievement number.
 type OverviewTotals struct {
 	Checkins       int `json:"checkins"`
 	ActiveProjects int `json:"activeProjects"`
 	BestStreak     int `json:"bestStreak"`
 	MonthCheckins  int `json:"monthCheckins"`
+	Slips          int `json:"slips"`
+	MonthSlips     int `json:"monthSlips"`
 }
 
-// DayActivity is one day of the cross-project activity heatmap.
+// DayActivity is one day of the cross-project activity heatmap. Count/Value
+// are good-habit check-ins; Slips is the bad-habit lapse count for the day.
 type DayActivity struct {
 	Date  string  `json:"date"`
 	Count int     `json:"count"`
 	Value float64 `json:"value"`
+	Slips int     `json:"slips"`
 }
 
 // CategoryCount is one slice of the category distribution (last 30 days).
@@ -55,20 +64,25 @@ type CategoryCount struct {
 	Count int    `json:"count"`
 }
 
-// Leader is one row of the streak leaderboard.
+// Leader is one row of the streak leaderboard. For a bad habit the streak is
+// the run of periods survived without a lapse, comparable to a good habit's
+// run of completed periods; Nature lets the UI label the two apart.
 type Leader struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Icon       string `json:"icon"`
 	Color      string `json:"color"`
+	Nature     string `json:"nature"`
 	Streak     int    `json:"streak"`
 	BestStreak int    `json:"bestStreak"`
 }
 
-// WeekCount is one bar of the 8-week trend.
+// WeekCount is one bar of the 8-week trend. Count is good-habit check-ins;
+// Slips is the bad-habit lapse count for the week.
 type WeekCount struct {
 	WeekStart string `json:"weekStart"`
 	Count     int    `json:"count"`
+	Slips     int    `json:"slips"`
 }
 
 // OverviewStats is everything the Stats page renders, in one response.
@@ -146,8 +160,10 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 	return out, nil
 }
 
-// Overview computes the cross-project dashboard for the given (already
-// visibility-filtered) projects.
+// Overview computes the cross-project dashboard. Good-habit progress and
+// bad-habit lapses are tallied separately throughout, so a lapse never reads as
+// an achievement: the check-in totals, activity heatmap and weekly trend count
+// good habits only, while slips get their own counters.
 func (s *Stats) Overview(ctx context.Context, projects []Project, today string) (OverviewStats, error) {
 	out := OverviewStats{
 		Today:            TodayCounters{Date: today},
@@ -190,6 +206,15 @@ func (s *Stats) Overview(ctx context.Context, projects []Project, today string) 
 		case StatusDue:
 			out.Today.Total++
 			out.Today.Due++
+		case StatusMissed:
+			// Only a bad habit's current period can read as missed (a lapse);
+			// a good habit's open period is pending, never missed.
+			out.Today.Total++
+			if p.Nature == NatureBad {
+				out.Today.Slipped++
+			} else {
+				out.Today.Pending++
+			}
 		default:
 			out.Today.Total++
 			out.Today.Pending++
@@ -202,7 +227,7 @@ func (s *Stats) Overview(ctx context.Context, projects []Project, today string) 
 			}
 		}
 		out.Leaders = append(out.Leaders, Leader{
-			ID: p.ID.String(), Name: p.Name, Icon: p.Icon, Color: p.Color,
+			ID: p.ID.String(), Name: p.Name, Icon: p.Icon, Color: p.Color, Nature: p.Nature,
 			Streak: stats.Summary.Streak, BestStreak: stats.Summary.BestStreak,
 		})
 	}
@@ -222,38 +247,48 @@ func (s *Stats) Overview(ctx context.Context, projects []Project, today string) 
 		out.Leaders = out.Leaders[:5]
 	}
 
-	// Lifetime and monthly check-in counts, one query each.
+	// Lifetime and monthly tallies, split by nature in one query each: good
+	// check-ins are the achievement number, bad check-ins are lapses (slips).
 	if err := s.db.sql.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM checkins WHERE project_id IN (`+placeholders+`)`, idArgs...,
-	).Scan(&out.Totals.Checkins); err != nil {
+		`SELECT COALESCE(SUM(p.nature = 'good'), 0), COALESCE(SUM(p.nature = 'bad'), 0)
+		 FROM checkins k JOIN projects p ON p.id = k.project_id
+		 WHERE k.project_id IN (`+placeholders+`)`, idArgs...,
+	).Scan(&out.Totals.Checkins, &out.Totals.Slips); err != nil {
 		return OverviewStats{}, fmt.Errorf("overview totals: %w", err)
 	}
 	monthStart := MonthStart(today)
 	if err := s.db.sql.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM checkins WHERE local_date >= ? AND project_id IN (`+placeholders+`)`,
+		`SELECT COALESCE(SUM(p.nature = 'good'), 0), COALESCE(SUM(p.nature = 'bad'), 0)
+		 FROM checkins k JOIN projects p ON p.id = k.project_id
+		 WHERE k.local_date >= ? AND k.project_id IN (`+placeholders+`)`,
 		append([]any{monthStart}, idArgs...)...,
-	).Scan(&out.Totals.MonthCheckins); err != nil {
+	).Scan(&out.Totals.MonthCheckins, &out.Totals.MonthSlips); err != nil {
 		return OverviewStats{}, fmt.Errorf("overview month: %w", err)
 	}
 
-	// 56 days of activity, one query; the 8-week trend is derived from it.
+	// 56 days of activity, one query; the 8-week trend is derived from it. The
+	// heat counts good-habit check-ins; lapses ride along as a separate series.
 	from := AddDays(today, -55)
 	rows, err := s.db.sql.QueryContext(ctx,
-		`SELECT local_date, COUNT(*), SUM(value) FROM checkins
-		 WHERE local_date >= ? AND local_date <= ? AND project_id IN (`+placeholders+`)
-		 GROUP BY local_date ORDER BY local_date`,
+		`SELECT k.local_date,
+			COALESCE(SUM(p.nature = 'good'), 0),
+			COALESCE(SUM(CASE WHEN p.nature = 'good' THEN k.value ELSE 0 END), 0),
+			COALESCE(SUM(p.nature = 'bad'), 0)
+		 FROM checkins k JOIN projects p ON p.id = k.project_id
+		 WHERE k.local_date >= ? AND k.local_date <= ? AND k.project_id IN (`+placeholders+`)
+		 GROUP BY k.local_date ORDER BY k.local_date`,
 		append([]any{from, today}, idArgs...)...)
 	if err != nil {
 		return OverviewStats{}, fmt.Errorf("overview activity: %w", err)
 	}
-	byDate := map[string]DayAggregate{}
+	byDate := map[string]DayActivity{}
 	for rows.Next() {
 		var d DayActivity
-		if err := rows.Scan(&d.Date, &d.Count, &d.Value); err != nil {
+		if err := rows.Scan(&d.Date, &d.Count, &d.Value, &d.Slips); err != nil {
 			_ = rows.Close()
 			return OverviewStats{}, fmt.Errorf("overview activity: %w", err)
 		}
-		byDate[d.Date] = DayAggregate{Count: d.Count, Value: d.Value}
+		byDate[d.Date] = d
 	}
 	_ = rows.Close()
 	if err := rows.Err(); err != nil {
@@ -261,27 +296,28 @@ func (s *Stats) Overview(ctx context.Context, projects []Project, today string) 
 	}
 	for d := from; d <= today; d = AddDays(d, 1) {
 		agg := byDate[d]
-		out.Activity = append(out.Activity, DayActivity{Date: d, Count: agg.Count, Value: agg.Value})
+		out.Activity = append(out.Activity, DayActivity{Date: d, Count: agg.Count, Value: agg.Value, Slips: agg.Slips})
 	}
 	thisWeek := WeekStart(today)
 	for i := 7; i >= 0; i-- {
 		ws := AddDays(thisWeek, -7*i)
-		count := 0
+		count, slips := 0, 0
 		for d := ws; d <= AddDays(ws, 6) && d <= today; d = AddDays(d, 1) {
 			count += byDate[d].Count
+			slips += byDate[d].Slips
 		}
-		out.Trend = append(out.Trend, WeekCount{WeekStart: ws, Count: count})
+		out.Trend = append(out.Trend, WeekCount{WeekStart: ws, Count: count, Slips: slips})
 	}
 
-	// Category distribution over the last 30 days. Uncategorized projects roll
-	// up into one bucket with an empty id.
+	// Category distribution of good-habit check-ins over the last 30 days.
+	// Uncategorized projects roll up into one bucket with an empty id.
 	catFrom := AddDays(today, -29)
 	catRows, err := s.db.sql.QueryContext(ctx,
 		`SELECT COALESCE(c.id, ''), COALESCE(c.name, '未分类'), COALESCE(c.icon, '🗂️'), COALESCE(c.color, 'blue'), COUNT(*)
 		 FROM checkins k
 		 JOIN projects p ON p.id = k.project_id
 		 LEFT JOIN categories c ON c.id = p.category_id
-		 WHERE k.local_date >= ? AND k.project_id IN (`+placeholders+`)
+		 WHERE k.local_date >= ? AND p.nature = 'good' AND k.project_id IN (`+placeholders+`)
 		 GROUP BY c.id ORDER BY COUNT(*) DESC`,
 		append([]any{catFrom}, idArgs...)...)
 	if err != nil {

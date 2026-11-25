@@ -59,10 +59,7 @@ type checkinRequest struct {
 
 // handleCreateCheckin serves POST /api/v1/projects/{id}/checkins (admin).
 func (a *API) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -92,7 +89,7 @@ type listCheckinsResponse struct {
 // handleListCheckins serves GET /api/v1/projects/{id}/checkins.
 // Parameters: from, to (YYYY-MM-DD bounds on the local date), limit (1..200).
 func (a *API) handleListCheckins(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -134,9 +131,6 @@ func (a *API) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 // handleDeleteCheckin serves DELETE /api/v1/checkins/{id} (admin): undo one
 // check-in. The project's stats recompute on the next read; nothing is cached.
 func (a *API) handleDeleteCheckin(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
 	id, err := parseUUID(r.PathValue("id"), "checkin id")
 	if err != nil {
 		a.fail(w, r, err)
@@ -174,7 +168,7 @@ type listSkipsResponse struct {
 
 // handleListSkips serves GET /api/v1/projects/{id}/skips.
 func (a *API) handleListSkips(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -200,10 +194,7 @@ type skipRequest struct {
 // handleCreateSkip serves POST /api/v1/projects/{id}/skips (admin): excuse a
 // day so it neither counts as missed nor breaks the streak.
 func (a *API) handleCreateSkip(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -222,10 +213,7 @@ func (a *API) handleCreateSkip(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteSkip serves DELETE /api/v1/projects/{id}/skips/{date} (admin).
 func (a *API) handleDeleteSkip(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}

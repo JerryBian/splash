@@ -29,7 +29,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migration2 adds the completion mode, the backfill marker and the
 // prerequisite graph. Existing single-tick projects (target <= 1) become
@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS prerequisites (
     requires_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     PRIMARY KEY (project_id, requires_id)
 );
+`
+
+// migration3 retires per-project visibility and adds the good/bad nature.
+// The whole app now sits behind the administrator login, so the private flag
+// has no meaning left; dropping it keeps the schema honest. Every existing
+// project becomes a good habit (the default), which preserves its verdicts.
+const migration3SQL = `
+ALTER TABLE projects DROP COLUMN private;
+ALTER TABLE projects ADD COLUMN nature TEXT NOT NULL DEFAULT 'good';
 `
 
 // DB is the SQLite-backed store. One connection is deliberate: SQLite writes
@@ -145,6 +154,11 @@ func (d *DB) migrate(ctx context.Context) error {
 	if version < 2 {
 		if _, err := d.sql.ExecContext(ctx, migration2SQL); err != nil {
 			return fmt.Errorf("store: apply schema v2: %w", err)
+		}
+	}
+	if version < 3 {
+		if _, err := d.sql.ExecContext(ctx, migration3SQL); err != nil {
+			return fmt.Errorf("store: apply schema v3: %w", err)
 		}
 	}
 	if _, err := d.sql.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {

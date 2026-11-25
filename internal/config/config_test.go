@@ -326,3 +326,30 @@ func TestApplyOverridesRejectsBadFlagValues(t *testing.T) {
 		}
 	}
 }
+
+func TestCookieSecureDefaultsByEnvironment(t *testing.T) {
+	// Development leaves the cookie non-Secure for plain-HTTP local use.
+	dev, err := FromMap(map[string]string{})
+	if err != nil {
+		t.Fatalf("dev config: %v", err)
+	}
+	if dev.CookieSecure {
+		t.Error("development should default CookieSecure to false")
+	}
+	// Production defaults it to True (HTTPS expected).
+	prod, err := FromMap(map[string]string{"SPLASH_ENV": "production"})
+	if err != nil {
+		t.Fatalf("prod config: %v", err)
+	}
+	if !prod.CookieSecure {
+		t.Error("production should default CookieSecure to true")
+	}
+	// An explicit value wins over the production default.
+	override, err := FromMap(map[string]string{"SPLASH_ENV": "production", "SPLASH_COOKIE_SECURE": "false"})
+	if err != nil {
+		t.Fatalf("override config: %v", err)
+	}
+	if override.CookieSecure {
+		t.Error("explicit SPLASH_COOKIE_SECURE=false should override the production default")
+	}
+}

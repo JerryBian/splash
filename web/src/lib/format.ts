@@ -95,10 +95,12 @@ export function scheduleName(schedule: ScheduleType): string {
 
 /**
  * One line describing a project's obligation, e.g. "每天 8 杯",
- * "每周一、三、五 1 次", "每 2 小时". Mirrors the server's schedule semantics.
+ * "每周一、三、五 1 次", "每 2 小时". A bad habit phrases the same cadence as
+ * avoidance ("每天 避免") because there is no quantity to reach. Mirrors the
+ * server's schedule semantics.
  */
-export function scheduleLabel(p: Pick<Project, 'schedule' | 'target' | 'unit' | 'weekdays' | 'interval'>): string {
-  const goal = `${formatValue(p.target)} ${p.unit}`.trim()
+export function scheduleLabel(p: Pick<Project, 'schedule' | 'target' | 'unit' | 'weekdays' | 'interval' | 'nature'>): string {
+  const goal = p.nature === 'bad' ? '避免' : `${formatValue(p.target)} ${p.unit}`.trim()
   switch (p.schedule) {
     case 'daily':
       return `每天 ${goal}`
@@ -146,9 +148,12 @@ function weekStartOf(day: string): string {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
 }
 
-/** Progress text "5 / 8 杯"; interval projects show a count instead. */
-export function progressLabel(p: Pick<Project, 'schedule' | 'unit'>, value: number, target: number): string {
-  if (p.schedule === 'interval_hours' || target <= 0) {
+/**
+ * Progress text "5 / 8 杯"; interval projects show a count instead. A bad
+ * habit shows the lapse count ("2 次") — there is no target to progress toward.
+ */
+export function progressLabel(p: Pick<Project, 'schedule' | 'unit' | 'nature'>, value: number, target: number): string {
+  if (p.nature === 'bad' || p.schedule === 'interval_hours' || target <= 0) {
     return `${formatValue(value)} 次`
   }
   return `${formatValue(value)} / ${formatValue(target)} ${p.unit}`

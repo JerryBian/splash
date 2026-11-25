@@ -31,7 +31,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     icon: '🧘',
     color: 'teal',
     categoryId: '',
-    private: false,
+    nature: 'good',
     schedule: 'daily',
     mode: 'check',
     target: 1,
@@ -51,12 +51,13 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
 
 export function makeOverview(overrides: Partial<Overview> = {}): Overview {
   return {
-    today: { date: TEST_TODAY, total: 1, done: 0, pending: 1, skipped: 0, due: 0 },
-    totals: { checkins: 0, activeProjects: 1, bestStreak: 0, monthCheckins: 0 },
+    today: { date: TEST_TODAY, total: 1, done: 0, pending: 1, skipped: 0, due: 0, slipped: 0 },
+    totals: { checkins: 0, activeProjects: 1, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 },
     activity: Array.from({ length: 7 }, (_, i) => ({
       date: `2026-11-${15 + i}`,
       count: 0,
       value: 0,
+      slips: 0,
     })),
     categories: [],
     leaders: [],
@@ -69,7 +70,7 @@ export function makeOverview(overrides: Partial<Overview> = {}): Overview {
 
 export function makeBootstrap(overrides: Partial<Bootstrap> = {}): Bootstrap {
   return {
-    session: { role: 'anonymous' },
+    session: { role: 'admin', username: 'admin' },
     projects: [makeProject()],
     categories: [],
     overview: makeOverview(),

@@ -1,13 +1,11 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
 	"uuid"
 
-	"github.com/JerryBian/splash/internal/auth"
 	"github.com/JerryBian/splash/internal/httpx"
 	"github.com/JerryBian/splash/internal/store"
 )
@@ -21,7 +19,7 @@ type project struct {
 	Icon          string         `json:"icon"`
 	Color         string         `json:"color"`
 	CategoryID    string         `json:"categoryId"` // "" when uncategorized
-	Private       bool           `json:"private"`
+	Nature        string         `json:"nature"`     // good | bad
 	Schedule      string         `json:"schedule"`
 	Mode          string         `json:"mode"`
 	Target        float64        `json:"target"`
@@ -85,7 +83,7 @@ func toProject(p store.Project, status *store.Summary) project {
 		Description: p.Description,
 		Icon:        p.Icon,
 		Color:       p.Color,
-		Private:     p.Private,
+		Nature:      p.Nature,
 		Schedule:    string(p.Schedule),
 		Mode:        p.Mode,
 		Target:      p.Target,
@@ -114,41 +112,18 @@ func toProject(p store.Project, status *store.Summary) project {
 	return out
 }
 
-// hidePrivatePrereqs strips prerequisite ids an anonymous visitor may not see,
-// so a public project's gate never leaks the existence of a private one.
-func (a *API) hidePrivatePrereqs(ctx context.Context, dto *project, visible map[string]bool) {
-	kept := make([]string, 0, len(dto.Prerequisites))
-	for _, id := range dto.Prerequisites {
-		if visible != nil {
-			if visible[id] {
-				kept = append(kept, id)
-			}
-			continue
-		}
-		uid, err := uuid.Parse(id)
-		if err != nil {
-			continue
-		}
-		p, err := a.projects.Get(ctx, uid)
-		if err == nil && !p.Private {
-			kept = append(kept, id)
-		}
-	}
-	dto.Prerequisites = kept
-}
-
 type listProjectsResponse struct {
 	Projects []project `json:"projects"`
 	Today    string    `json:"today"`
 }
 
-// handleListProjects serves GET /api/v1/projects.
+// handleListProjects serves GET /api/v1/projects (administrator).
 //
 // Every project carries its current status (progress, streak, countdown), so
 // the Today page is one request. Query parameters:
 //
 //	date      the client's calendar day, YYYY-MM-DD (default: server's)
-//	archived  "1" includes archived projects (admin only)
+//	archived  "1" includes archived projects
 //	category  filter by category id
 //	q         substring match on name and description
 func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -156,10 +131,8 @@ func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	admin := auth.IsAdmin(r.Context())
 	q := store.ProjectQuery{
-		VisibleOnly:     !admin,
-		IncludeArchived: admin && r.URL.Query().Get("archived") == "1",
+		IncludeArchived: r.URL.Query().Get("archived") == "1",
 		CategoryID:      strings.TrimSpace(r.URL.Query().Get("category")),
 		Search:          r.URL.Query().Get("q"),
 	}
@@ -177,15 +150,6 @@ func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
 		}
 		out[i] = toProject(p, &stats.Summary)
 	}
-	if !admin {
-		visible := make(map[string]bool, len(projects))
-		for _, p := range projects {
-			visible[p.ID.String()] = true
-		}
-		for i := range out {
-			a.hidePrivatePrereqs(r.Context(), &out[i], visible)
-		}
-	}
 	a.write(w, r, http.StatusOK, listProjectsResponse{Projects: out, Today: today})
 }
 
@@ -196,7 +160,7 @@ type projectRequest struct {
 	Icon          string   `json:"icon"`
 	Color         string   `json:"color"`
 	CategoryID    string   `json:"categoryId"`
-	Private       bool     `json:"private"`
+	Nature        string   `json:"nature"`
 	Schedule      string   `json:"schedule"`
 	Mode          string   `json:"mode"`
 	Target        float64  `json:"target"`
@@ -207,11 +171,8 @@ type projectRequest struct {
 	Prerequisites []string `json:"prerequisites"`
 }
 
-// handleCreateProject serves POST /api/v1/projects (admin).
+// handleCreateProject serves POST /api/v1/projects (administrator).
 func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
 	req, err := httpx.DecodeJSON[projectRequest](w, r, a.maxBody)
 	if err != nil {
 		a.fail(w, r, err)
@@ -223,7 +184,7 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		Icon:          req.Icon,
 		Color:         req.Color,
 		CategoryID:    req.CategoryID,
-		Private:       req.Private,
+		Nature:        req.Nature,
 		Schedule:      store.ScheduleType(req.Schedule),
 		Mode:          req.Mode,
 		Target:        req.Target,
@@ -244,7 +205,7 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 
 // handleGetProject serves GET /api/v1/projects/{id}, with its current status.
 func (a *API) handleGetProject(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -263,11 +224,7 @@ func (a *API) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	dto := toProject(p, &stats.Summary)
-	if !auth.IsAdmin(r.Context()) {
-		a.hidePrivatePrereqs(r.Context(), &dto, nil)
-	}
-	a.write(w, r, http.StatusOK, dto)
+	a.write(w, r, http.StatusOK, toProject(p, &stats.Summary))
 }
 
 // projectPatchRequest is the PATCH body. Pointers distinguish "absent" from
@@ -278,7 +235,7 @@ type projectPatchRequest struct {
 	Icon          *string   `json:"icon,omitempty"`
 	Color         *string   `json:"color,omitempty"`
 	CategoryID    *string   `json:"categoryId,omitempty"`
-	Private       *bool     `json:"private,omitempty"`
+	Nature        *string   `json:"nature,omitempty"`
 	Schedule      *string   `json:"schedule,omitempty"`
 	Mode          *string   `json:"mode,omitempty"`
 	Target        *float64  `json:"target,omitempty"`
@@ -297,7 +254,7 @@ func (req projectPatchRequest) toPatch() store.ProjectPatch {
 		Icon:          req.Icon,
 		Color:         req.Color,
 		CategoryID:    req.CategoryID,
-		Private:       req.Private,
+		Nature:        req.Nature,
 		Mode:          req.Mode,
 		Target:        req.Target,
 		Unit:          req.Unit,
@@ -319,10 +276,7 @@ func (req projectPatchRequest) toPatch() store.ProjectPatch {
 // If-Match, when present, is parsed into a version and enforced inside the
 // store's UPDATE ... WHERE version = ? — not by a check-then-write gap here.
 func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -348,10 +302,7 @@ func (a *API) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 // handleDeleteProject serves DELETE /api/v1/projects/{id} (admin). Check-ins
 // and skips cascade.
 func (a *API) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}

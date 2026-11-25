@@ -8,6 +8,7 @@ import { fetchDay, invalidate } from '../lib/async'
 import { formatClock } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatValue, progressLabel } from '../lib/format'
+import { isBad } from '../lib/schedule'
 import { CheckIcon, MinusIcon, PlusIcon, SkipIcon, TrashIcon } from './icons'
 import { ConfirmDialog, Sheet } from './overlays'
 import { Button, Field, IconButton, Input, RecordBadges } from './ui'
@@ -44,6 +45,7 @@ export function CheckinSheet({
 
   const isInterval = project.schedule === 'interval_hours'
   const isCheck = project.mode === 'check'
+  const bad = isBad(project)
   const status = project.status
   const [confirmGate, setConfirmGate] = useState(false)
 
@@ -74,9 +76,10 @@ export function CheckinSheet({
         date,
         tzOffset: -new Date().getTimezoneOffset(),
       })
+      const recorded = bad ? `已记录「${project.name}」破戒` : `已为「${project.name}」打卡`
       toast(
-        created.violated ? `已打卡「${project.name}」，但记了一次前置违规` : `已为「${project.name}」打卡`,
-        created.violated ? 'error' : 'ok',
+        created.violated ? `${recorded}，但记了一次前置违规` : recorded,
+        created.violated ? 'error' : bad ? 'info' : 'ok',
       )
       setNote('')
       setMood('')
@@ -113,7 +116,7 @@ export function CheckinSheet({
           onClick={() => void submit()}
         >
           <CheckIcon size={16} strokeWidth={2.4} />
-          {isInterval || isCheck ? '打卡' : `记录 ${valueValid ? formatValue(numericValue) : '—'} ${project.unit}`}
+          {bad ? '记录破戒' : isInterval || isCheck ? '打卡' : `记录 ${valueValid ? formatValue(numericValue) : '—'} ${project.unit}`}
         </Button>
       }
     >
@@ -129,11 +132,13 @@ export function CheckinSheet({
           />
         </Field>
 
-        {isCheck ? (
+        {bad ? (
+          <p className="sheet-note">坏习惯：记录一次破戒，无需填数量；坚持不做才是目标。</p>
+        ) : isCheck ? (
           <p className="sheet-note">打勾型项目：每天打一次勾即完成，无需填数量。</p>
-        ) : null}
-
-        {!isInterval && !isCheck ? (
+        ) : isInterval ? (
+          <p className="sheet-note">间隔项目每次记 1 次，打卡后重新开始倒计时。</p>
+        ) : (
           <Field label={`数量（${project.unit}）`} htmlFor="checkin-value">
             <div className="stepper">
               <IconButton
@@ -174,8 +179,6 @@ export function CheckinSheet({
               </div>
             ) : null}
           </Field>
-        ) : (
-          <p className="sheet-note">间隔项目每次记 1 次，打卡后重新开始倒计时。</p>
         )}
 
         <Field label="备注（可选）" htmlFor="checkin-note">
@@ -224,8 +227,8 @@ export function CheckinSheet({
     <ConfirmDialog
       open={confirmGate}
       title="前置条件未满足"
-      message={`今天还有 ${status?.unmet.length ?? 0} 个前置项目没完成。现在打卡会被标记为一次前置违规；之后补卡前置可自动消除。仍要打卡吗？`}
-      confirmLabel="仍要打卡"
+      message={`今天还有 ${status?.unmet.length ?? 0} 个前置项目没完成。现在${bad ? '记录' : '打卡'}会被标记为一次前置违规；之后补卡前置可自动消除。仍要${bad ? '记录' : '打卡'}吗？`}
+      confirmLabel={bad ? '仍要记录' : '仍要打卡'}
       onConfirm={() => void submit()}
       onClose={() => setConfirmGate(false)}
     />

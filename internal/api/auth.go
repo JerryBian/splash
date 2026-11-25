@@ -40,6 +40,9 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"username or password is incorrect"))
 		return
 	}
+	// A correct sign-in clears this IP's guess budget: the limiter exists to
+	// stop password guessing, not to lock out the admin's own logins.
+	a.limiter.Reset(clientIP(r))
 	token, err := a.authn.Issue()
 	if err != nil {
 		a.fail(w, r, err)

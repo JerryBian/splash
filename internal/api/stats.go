@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/JerryBian/splash/internal/auth"
 	"github.com/JerryBian/splash/internal/httpx"
 	"github.com/JerryBian/splash/internal/store"
 )
@@ -25,7 +24,7 @@ type statsResponse struct {
 // handleProjectStats serves GET /api/v1/projects/{id}/stats.
 // weeks controls the heatmap length (1..53, default 26).
 func (a *API) handleProjectStats(w http.ResponseWriter, r *http.Request) {
-	p, ok := a.visibleProject(w, r)
+	p, ok := a.loadProject(w, r)
 	if !ok {
 		return
 	}
@@ -68,15 +67,13 @@ func (a *API) handleProjectStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOverview serves GET /api/v1/stats/overview: the cross-project
-// dashboard, computed over exactly the projects the caller may see.
+// dashboard over every active project, with good and bad habits tallied apart.
 func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {
 	today, ok := a.today(w, r)
 	if !ok {
 		return
 	}
-	projects, err := a.projects.List(r.Context(), store.ProjectQuery{
-		VisibleOnly: !auth.IsAdmin(r.Context()),
-	})
+	projects, err := a.projects.List(r.Context(), store.ProjectQuery{})
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -93,9 +90,6 @@ func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {
 // as a download. Import is deliberately not offered — restoring is an
 // operator action on the database file, not an HTTP write.
 func (a *API) handleExport(w http.ResponseWriter, r *http.Request) {
-	if !a.requireAdmin(w, r) {
-		return
-	}
 	data, err := a.export.Dump(r.Context())
 	if err != nil {
 		a.fail(w, r, err)
@@ -103,4 +97,21 @@ func (a *API) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="splash-export.json"`)
 	a.write(w, r, http.StatusOK, data)
+}
+
+// handleImport serves POST /api/v1/import (admin): restore a JSON backup. The
+// body is the same shape GET /export produces. Import is additive by id, so it
+// never overwrites existing data and re-importing a backup is a no-op.
+func (a *API) handleImport(w http.ResponseWriter, r *http.Request) {
+	data, err := httpx.DecodeJSON[store.ExportData](w, r, a.maxBody)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	counts, err := a.importer.Import(r.Context(), data)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.write(w, r, http.StatusOK, counts)
 }

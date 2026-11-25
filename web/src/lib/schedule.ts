@@ -4,12 +4,22 @@
  * nothing here re-derives streaks or periods, so the two ends cannot disagree.
  */
 
-import type { DayStatus, HeatCell, Project, ProjectMode } from '../api/types'
+import type { DayStatus, HeatCell, Project, ProjectMode, ProjectNature } from '../api/types'
 import { parseDay } from './date'
 
 /** Human label for the completion mode (orthogonal to the schedule). */
 export function modeLabel(mode: ProjectMode): string {
   return mode === 'check' ? '打勾一次' : '累计数量'
+}
+
+/** Human label for the nature (a habit to build vs a habit to break). */
+export function natureLabel(nature: ProjectNature): string {
+  return nature === 'bad' ? '坏习惯' : '好习惯'
+}
+
+/** True when the project tracks a habit to avoid rather than one to build. */
+export function isBad(p: Pick<Project, 'nature'>): boolean {
+  return p.nature === 'bad'
 }
 
 export const STATUS_LABEL: Record<DayStatus, string> = {
@@ -24,7 +34,29 @@ export const STATUS_LABEL: Record<DayStatus, string> = {
   none: '无记录',
 }
 
-/** Statuses that mean the obligation is met. */
+/**
+ * The same verdict tokens read differently for a bad habit: done means the
+ * period was kept clean ("held"), missed means a lapse was recorded. The server
+ * computes which token applies; only the wording flips here.
+ */
+export const BAD_STATUS_LABEL: Record<DayStatus, string> = {
+  done: '未破戒',
+  partial: '已破戒',
+  pending: '保持中',
+  missed: '已破戒',
+  skipped: '已跳过',
+  rest: '休息日',
+  due: '可记录',
+  waiting: '倒计时中',
+  none: '无记录',
+}
+
+/** The Chinese label for a verdict, honoring the project's nature. */
+export function statusLabel(status: DayStatus, nature: ProjectNature = 'good'): string {
+  return nature === 'bad' ? BAD_STATUS_LABEL[status] : STATUS_LABEL[status]
+}
+
+/** Statuses that mean the obligation is met (for a bad habit: kept clean). */
 export function isComplete(status: DayStatus): boolean {
   return status === 'done'
 }
@@ -61,7 +93,12 @@ export function dailyEquivalentTarget(p: Project): number {
  * target. One hue, light → dark: the sequential rule. Status markers (skip,
  * miss, rest) are shapes, not colors, so they survive any color vision.
  */
-export function heatLevel(cell: HeatCell, dailyTarget: number): number {
+export function heatLevel(cell: HeatCell, dailyTarget: number, nature: ProjectNature = 'good'): number {
+  if (nature === 'bad') {
+    // Abstention calendar: a clean day fills with the ink, a lapse day stays
+    // empty and carries the × marker instead. Magnitude is not the story.
+    return cell.status === 'done' ? 4 : 0
+  }
   if (cell.value <= 0) return 0
   const ratio = cell.value / Math.max(0.001, dailyTarget)
   if (ratio >= 1) return 4

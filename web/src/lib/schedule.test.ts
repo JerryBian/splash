@@ -4,10 +4,12 @@ import {
   activityLevel,
   dailyEquivalentTarget,
   heatLevel,
+  isBad,
   isCheckable,
   isComplete,
   needsValueSheet,
   STATUS_LABEL,
+  statusLabel,
 } from './schedule'
 
 describe('status helpers', () => {
@@ -24,6 +26,28 @@ describe('status helpers', () => {
     expect(STATUS_LABEL['done']).toBe('已完成')
     expect(STATUS_LABEL['missed']).toBe('缺失')
     expect(STATUS_LABEL['skipped']).toBe('已跳过')
+  })
+})
+
+describe('nature-aware helpers', () => {
+  it('labels the same verdict differently for a bad habit', () => {
+    expect(statusLabel('done', 'good')).toBe('已完成')
+    expect(statusLabel('done', 'bad')).toBe('未破戒')
+    expect(statusLabel('missed', 'good')).toBe('缺失')
+    expect(statusLabel('missed', 'bad')).toBe('已破戒')
+    expect(statusLabel('done')).toBe('已完成') // defaults to good
+  })
+  it('fills clean days and empties lapse days for a bad habit', () => {
+    const clean = { date: '2026-11-21', value: 0, count: 0, status: 'done' as const }
+    const lapse = { date: '2026-11-20', value: 1, count: 1, status: 'missed' as const }
+    expect(heatLevel(clean, 1, 'bad')).toBe(4)
+    expect(heatLevel(lapse, 1, 'bad')).toBe(0)
+    // A good habit still scales by magnitude.
+    expect(heatLevel(clean, 8, 'good')).toBe(0)
+  })
+  it('knows a bad project', () => {
+    expect(isBad(makeProject({ nature: 'bad' }))).toBe(true)
+    expect(isBad(makeProject({ nature: 'good' }))).toBe(false)
   })
 })
 

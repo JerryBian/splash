@@ -137,7 +137,8 @@ type Config struct {
 	EnablePprof bool
 
 	// AdminUsername and AdminPassword are the single administrator account.
-	// Anonymous visitors need no credentials; they see public projects only.
+	// Every page and every data route requires this login; there is no
+	// anonymous access.
 	AdminUsername string
 	AdminPassword string
 	// AuthSecret signs session cookies (HMAC-SHA256). Rotating it invalidates
@@ -146,8 +147,9 @@ type Config struct {
 	// DBPath is the SQLite database file. Its parent directory is created at
 	// startup. ":memory:" keeps everything in process memory, for tests.
 	DBPath string
-	// CookieSecure marks the session cookie Secure. Enable it when serving
-	// over HTTPS; leave it off for plain-HTTP local development.
+	// CookieSecure marks the session cookie Secure. It defaults to true under
+	// [Production] (HTTPS expected) and false otherwise; set it explicitly to
+	// override either default.
 	CookieSecure bool
 	// SessionTTL is the IDLE timeout of a login: activity slides it forward
 	// (see auth.Middleware), so it only bites after this much silence. The
@@ -229,7 +231,7 @@ func load(lookup lookupFunc) (Config, error) {
 	set(&cfg.AdminPassword, lookup, VarAdminPassword, parseNonEmptyString, &errs)
 	set(&cfg.AuthSecret, lookup, VarAuthSecret, parseNonEmptyString, &errs)
 	set(&cfg.DBPath, lookup, VarDBPath, parseNonEmptyString, &errs)
-	set(&cfg.CookieSecure, lookup, VarCookieSecure, parseBool, &errs)
+	cookieSecureExplicit := set(&cfg.CookieSecure, lookup, VarCookieSecure, parseBool, &errs)
 	set(&cfg.SessionTTL, lookup, VarSessionTTL, parseDuration, &errs)
 	set(&cfg.SeedDemo, lookup, VarSeedDemo, parseBool, &errs)
 
@@ -238,6 +240,13 @@ func load(lookup lookupFunc) (Config, error) {
 	// SPLASH_ENV said so, since the default is Development.
 	if !logFormatExplicit && cfg.Env == Production {
 		cfg.LogFormat = LogFormatJSON
+	}
+	// Production also defaults the session cookie to Secure: a production
+	// deployment is expected to sit behind HTTPS, and a Secure cookie cannot
+	// leak over plain HTTP. An operator on plain HTTP can still opt out with
+	// SPLASH_COOKIE_SECURE=false.
+	if !cookieSecureExplicit && cfg.Env == Production {
+		cfg.CookieSecure = true
 	}
 
 	if err := cfg.Validate(); err != nil {

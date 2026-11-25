@@ -111,21 +111,36 @@ describe('TodayView', () => {
     })
   })
 
-  it('shows the anonymous banner and no stamp buttons for visitors', () => {
-    stubFetch(refreshRoutes())
+  it('opens the record sheet for a bad habit instead of quick-checking', async () => {
+    const bad = makeProject({
+      id: 'p-bad',
+      name: '熬夜',
+      icon: '🦉',
+      nature: 'bad',
+      status: makeStatus({ status: 'done' }),
+    })
+    const fetchMock = stubFetch({
+      '/api/v1/projects/p-bad/checkins': { checkins: [] },
+      '/api/v1/projects/p-bad/skips': { skips: [] },
+      ...refreshRoutes([bad]),
+    })
     render(
-      <AppProvider initial={makeBootstrap()}>
+      <AppProvider initial={makeBootstrap({ projects: [bad] })}>
         <TodayView />
       </AppProvider>,
     )
-    expect(screen.getByText(/访客模式/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('为 冥想 打卡')).not.toBeInTheDocument()
+
+    // A lapse is deliberate: the stamp opens the sheet, no POST fires yet.
+    await userEvent.click(screen.getByLabelText('记录 熬夜 破戒'))
+    expect(await screen.findByRole('dialog', { name: '熬夜' })).toBeInTheDocument()
+    expect(screen.getByText('记录破戒')).toBeInTheDocument()
+    expect(callTo(fetchMock, '/checkins', 'POST')).toBeUndefined()
   })
 
   it('invites the admin to create the first project when empty', () => {
     stubFetch(refreshRoutes([]))
     render(
-      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [], overview: makeOverview({ today: { date: TEST_TODAY, total: 0, done: 0, pending: 0, skipped: 0, due: 0 }, totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0 } }) })}>
+      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [], overview: makeOverview({ today: { date: TEST_TODAY, total: 0, done: 0, pending: 0, skipped: 0, due: 0, slipped: 0 }, totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 } }) })}>
         <TodayView />
       </AppProvider>,
     )

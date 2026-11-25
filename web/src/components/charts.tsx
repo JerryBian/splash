@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
-import type { HeatCell, InkColor, PeriodBar } from '../api/types'
+import type { HeatCell, InkColor, PeriodBar, ProjectNature } from '../api/types'
 
 /** Chart hue: a project ink, or the calm brand celadon for cross-project views. */
 export type ChartColor = InkColor | 'brand'
 import { addDays, formatDayCN, formatMonthShort, formatRangeCN, weekStart, weekdayOf } from '../lib/date'
 import { formatValue } from '../lib/format'
-import { heatLevel, STATUS_LABEL } from '../lib/schedule'
+import { heatLevel, statusLabel } from '../lib/schedule'
 
 /**
  * Charts are hand-built SVG/div marks: three small forms, no chart library.
@@ -76,6 +76,7 @@ export function Heatmap({
   unit,
   selected,
   onSelect,
+  nature = 'good',
 }: {
   cells: HeatCell[]
   color: ChartColor
@@ -83,6 +84,7 @@ export function Heatmap({
   unit?: string
   selected?: string
   onSelect?: (date: string) => void
+  nature?: ProjectNature
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -168,7 +170,7 @@ export function Heatmap({
 
   const cellLabel = (cell: HeatCell): string => {
     const amount = cell.value > 0 ? `，${formatValue(cell.value)}${unit ?? ''}` : ''
-    return `${formatDayCN(cell.date)}：${STATUS_LABEL[cell.status]}${amount}`
+    return `${formatDayCN(cell.date)}：${statusLabel(cell.status, nature)}${amount}`
   }
 
   // Explicit width from the column count: the scroll extents are correct on
@@ -210,7 +212,7 @@ export function Heatmap({
                   if (cell.empty === true) {
                     return <span key={cell.date} className="heat-cell" data-empty="true" />
                   }
-                  const level = heatLevel(cell, dailyTarget)
+                  const level = heatLevel(cell, dailyTarget, nature)
                   const interactive = onSelect !== undefined
                   const props = {
                     className: 'heat-cell',
@@ -242,33 +244,50 @@ export function Heatmap({
         </div>
       </div>
       <div className="heatmap-legend">
-        <span className="legend-item">
-          <span className="legend-ramp" aria-hidden="true">
-            <i data-level="0" />
-            <i data-level="1" />
-            <i data-level="2" />
-            <i data-level="3" />
-            <i data-level="4" />
-          </span>
-          少 → 多
-        </span>
+        {nature === 'bad' ? (
+          <>
+            <span className="legend-item">
+              <i className="legend-cell" data-level="4" aria-hidden="true" />
+              守住
+            </span>
+            <span className="legend-item">
+              <i className="legend-cell" data-status="missed" aria-hidden="true">
+                ×
+              </i>
+              破戒
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="legend-item">
+              <span className="legend-ramp" aria-hidden="true">
+                <i data-level="0" />
+                <i data-level="1" />
+                <i data-level="2" />
+                <i data-level="3" />
+                <i data-level="4" />
+              </span>
+              少 → 多
+            </span>
+            <span className="legend-item">
+              <i className="legend-cell" data-status="missed" aria-hidden="true">
+                ×
+              </i>
+              缺失
+            </span>
+            <span className="legend-item">
+              <i className="legend-cell" data-status="pending" aria-hidden="true" />
+              今天
+            </span>
+          </>
+        )}
         <span className="legend-item">
           <i className="legend-cell" data-status="skipped" aria-hidden="true" />
           跳过
         </span>
         <span className="legend-item">
-          <i className="legend-cell" data-status="missed" aria-hidden="true">
-            ×
-          </i>
-          缺失
-        </span>
-        <span className="legend-item">
           <i className="legend-cell" data-status="rest" aria-hidden="true" />
           休息
-        </span>
-        <span className="legend-item">
-          <i className="legend-cell" data-status="pending" aria-hidden="true" />
-          今天
         </span>
       </div>
     </div>
@@ -394,11 +413,13 @@ export function TrendBars({
   color,
   unit,
   labelFor,
+  nature = 'good',
 }: {
   bars: PeriodBar[]
   color: ChartColor
   unit: string
   labelFor: (bar: PeriodBar) => string
+  nature?: ProjectNature
 }) {
   const max = Math.max(1, ...bars.map((b) => Math.max(b.value, b.target)))
   const bestIndex = bars.reduce((best, bar, i) => (bar.value > (bars[best]?.value ?? 0) ? i : best), 0)
@@ -407,12 +428,16 @@ export function TrendBars({
     () =>
       bars.map((bar, index) => ({
         bar,
-        title: `${formatRangeCN(bar.start, bar.end)}：${formatValue(bar.value)} / ${formatValue(bar.target)} ${unit} · ${STATUS_LABEL[bar.status]}`,
+        // A bad habit has no target line: the bar is the lapse count.
+        title:
+          nature === 'bad'
+            ? `${formatRangeCN(bar.start, bar.end)}：${formatValue(bar.value)} 次 · ${statusLabel(bar.status, nature)}`
+            : `${formatRangeCN(bar.start, bar.end)}：${formatValue(bar.value)} / ${formatValue(bar.target)} ${unit} · ${statusLabel(bar.status, nature)}`,
         showLabel: index === bars.length - 1 || (index === bestIndex && bar.value > 0),
         targetStyle: { bottom: `${Math.round((bar.target / max) * 100)}%` },
         barStyle: { height: `${Math.max(bar.value > 0 ? 4 : 0, Math.round((bar.value / max) * 100))}%` },
       })),
-    [bars, max, bestIndex, unit],
+    [bars, max, bestIndex, unit, nature],
   )
   return (
     <div className="trend" data-ink={color}>

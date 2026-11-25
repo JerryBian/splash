@@ -98,6 +98,14 @@ export type ProjectStatus = {
 /** How completion is measured, orthogonal to the schedule (period layout). */
 export type ProjectMode = 'check' | 'value'
 
+/**
+ * Whether a project is a habit to build or a habit to break. Mirrors the
+ * Nature* constants in store/domain.go. For a bad habit a check-in records a
+ * lapse, the streak counts periods survived clean, and the verdict tokens
+ * invert (done = held, missed = lapsed) — see lib/schedule.ts for the labels.
+ */
+export type ProjectNature = 'good' | 'bad'
+
 export type Project = {
   id: string
   name: string
@@ -106,8 +114,8 @@ export type Project = {
   color: InkColor
   /** "" when uncategorized. */
   categoryId: string
-  /** Hidden from anonymous visitors. */
-  private: boolean
+  /** good = build the habit; bad = break it. Every project needs login to see. */
+  nature: ProjectNature
   schedule: ScheduleType
   /** check = one tick completes the period; value = accumulate to target. */
   mode: ProjectMode
@@ -197,13 +205,21 @@ export type ProjectStats = {
 }
 
 export type Overview = {
-  today: { date: string; total: number; done: number; pending: number; skipped: number; due: number }
-  totals: { checkins: number; activeProjects: number; bestStreak: number; monthCheckins: number }
-  /** Last 56 days, oldest first. */
-  activity: { date: string; count: number; value: number }[]
+  today: { date: string; total: number; done: number; pending: number; skipped: number; due: number; slipped: number }
+  totals: {
+    checkins: number
+    activeProjects: number
+    bestStreak: number
+    monthCheckins: number
+    /** Bad-habit lapses, kept apart from the good-habit check-in totals. */
+    slips: number
+    monthSlips: number
+  }
+  /** Last 56 days, oldest first. count/value are good habits; slips are lapses. */
+  activity: { date: string; count: number; value: number; slips: number }[]
   categories: { id: string; name: string; icon: string; color: InkColor; count: number }[]
-  leaders: { id: string; name: string; icon: string; color: InkColor; streak: number; bestStreak: number }[]
-  trend: { weekStart: string; count: number }[]
+  leaders: { id: string; name: string; icon: string; color: InkColor; nature: ProjectNature; streak: number; bestStreak: number }[]
+  trend: { weekStart: string; count: number; slips: number }[]
   violations: number
   recentViolations: Checkin[]
 }
@@ -214,7 +230,7 @@ export type ProjectInput = {
   icon?: string
   color?: InkColor
   categoryId?: string
-  private?: boolean
+  nature?: ProjectNature
   schedule: ScheduleType
   mode?: ProjectMode
   target?: number
@@ -233,7 +249,7 @@ export type ProjectPatch = {
   color?: InkColor
   /** "" clears the category. */
   categoryId?: string
-  private?: boolean
+  nature?: ProjectNature
   schedule?: ScheduleType
   mode?: ProjectMode
   target?: number
@@ -259,6 +275,23 @@ export type CategoryInput = {
   name: string
   icon?: string
   color?: InkColor
+}
+
+/** A full backup, the shape GET /export produces and POST /import accepts. */
+export type ExportData = {
+  exportedAt: string
+  categories: Category[]
+  projects: Project[]
+  checkins: Checkin[]
+  skips: Skip[]
+}
+
+/** How many rows an import added (duplicates by id are skipped). */
+export type ImportCounts = {
+  categories: number
+  projects: number
+  checkins: number
+  skips: number
 }
 
 export type ListProjectsParams = {

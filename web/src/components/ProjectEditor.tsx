@@ -1,9 +1,8 @@
 import { useMemo, useState } from 'react'
 import { api } from '../api/client'
-import type { InkColor, Project, ProjectInput, ProjectMode, ScheduleType } from '../api/types'
+import type { InkColor, Project, ProjectInput, ProjectMode, ProjectNature, ScheduleType } from '../api/types'
 import { useApp } from '../hooks/useApp'
 import { useSessionHeartbeat } from '../hooks/useHeartbeat'
-import { navigate } from '../hooks/useNow'
 import { weekdayName } from '../lib/date'
 import { describeError, fieldErrorsFrom } from '../lib/errors'
 import { pickUnusedColor } from '../lib/palette'
@@ -27,14 +26,23 @@ const MODE_OPTIONS: { value: ProjectMode; label: string }[] = [
   { value: 'value', label: '累计数量' },
 ]
 
+const NATURE_OPTIONS: { value: ProjectNature; label: string }[] = [
+  { value: 'good', label: '好习惯' },
+  { value: 'bad', label: '坏习惯' },
+]
+
 /**
  * Create / edit a project. The schedule picker is the heart: six families,
  * each revealing exactly the fields it needs. Client validation mirrors the
  * server's rules with Chinese messages; server field errors still land under
  * the right inputs, so the two ends cannot drift into contradicting the user.
+ *
+ * The nature picker decides whether the project is a habit to build or to
+ * break. A bad habit records occurrences (check mode, no target) and cannot
+ * use the interval_hours countdown, so those controls hide when it is chosen.
  */
 export function ProjectEditor({ projectId }: { projectId: string }) {
-  const { projects, categories, today, isAdmin, refresh, toast } = useApp()
+  const { projects, categories, today, refresh, toast } = useApp()
   const existing: Project | undefined = projectId === 'new' ? undefined : projects.find((p) => p.id === projectId)
 
   // New projects get a fresh ink whenever possible; an edit keeps its color.
@@ -55,7 +63,7 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
     existing?.color ?? pickUnusedColor(usedColors),
   )
   const [categoryId, setCategoryId] = useState(existing?.categoryId ?? '')
-  const [isPrivate, setIsPrivate] = useState(existing?.private ?? false)
+  const [nature, setNature] = useState<ProjectNature>(existing?.nature ?? 'good')
   const [schedule, setSchedule] = useState<ScheduleType>(existing?.schedule ?? 'daily')
   const [mode, setMode] = useState<ProjectMode>(existing?.mode ?? 'check')
   const [prerequisites, setPrerequisites] = useState<string[]>(existing?.prerequisites ?? [])
@@ -73,17 +81,17 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
 
   // An open editor is "正在编辑": keep the session slid forward even while
   // the user types without saving.
-  useSessionHeartbeat(isAdmin)
+  useSessionHeartbeat(true)
 
-  if (!isAdmin) {
-    return (
-      <div className="view">
-        <EditorBack />
-        <p className="sheet-note">需要管理员登录才能创建或编辑项目。</p>
-        <Button onClick={() => navigate('#login')}>登录</Button>
-      </div>
-    )
-  }
+  const bad = nature === 'bad'
+  // A bad habit has no "check in every N hours" obligation, so that family is
+  // not offered; the rest of the cadences still describe when to avoid it.
+  // Memoized (and kept above the early return) so the hook order is stable and
+  // the Segmented prop keeps a stable identity across renders.
+  const scheduleOptions = useMemo(
+    () => (bad ? SCHEDULE_OPTIONS.filter((o) => o.value !== 'interval_hours') : SCHEDULE_OPTIONS),
+    [bad],
+  )
 
   if (projectId !== 'new' && existing === undefined) {
     return (
@@ -96,8 +104,16 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
 
   const isIntervalHours = schedule === 'interval_hours'
   const isIntervalDays = schedule === 'interval_days'
-  const needsTarget = !isIntervalHours && mode === 'value'
+  const needsTarget = !bad && !isIntervalHours && mode === 'value'
   const needsWeekdays = schedule === 'weekdays'
+
+  const chooseNature = (next: ProjectNature) => {
+    setNature(next)
+    if (next === 'bad') {
+      setMode('check')
+      if (schedule === 'interval_hours') setSchedule('daily')
+    }
+  }
 
   const validate = (): Record<string, string> => {
     const problems: Record<string, string> = {}
@@ -131,11 +147,11 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
       icon,
       color,
       categoryId,
-      private: isPrivate,
+      nature,
       schedule,
-      mode,
-      target: needsTarget ? Number(target) : 1,
-      unit: unit.trim() === '' ? '次' : unit.trim(),
+      mode: bad ? 'check' : mode,
+      target: bad ? 1 : needsTarget ? Number(target) : 1,
+      unit: bad ? '次' : unit.trim() === '' ? '次' : unit.trim(),
       weekdays: needsWeekdays ? weekdays : [],
       interval: isIntervalHours || isIntervalDays ? Number(interval) : 0,
       startDate,
@@ -217,13 +233,24 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
           </select>
         </Field>
 
-        <Field label="打卡频率">
-          <Segmented options={SCHEDULE_OPTIONS} value={schedule} onChange={setSchedule} ariaLabel="打卡频率" />
+        <Field
+          label="习惯性质"
+          hint={bad ? '坏习惯：记录每次破戒，坚持不做才算成功' : '好习惯：打卡累计进度，达到目标即完成'}
+        >
+          <Segmented options={NATURE_OPTIONS} value={nature} onChange={chooseNature} ariaLabel="习惯性质" />
         </Field>
 
-        <Field label="完成方式" hint={mode === 'check' ? '每天打一次勾即完成，「30 分钟」等写在说明里' : '累计数量达到目标才算完成'}>
-          <Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} ariaLabel="完成方式" />
+        <Field label="打卡频率">
+          <Segmented options={scheduleOptions} value={schedule} onChange={setSchedule} ariaLabel="打卡频率" />
         </Field>
+
+        {bad ? (
+          <p className="sheet-note">坏习惯按「打勾一次」记录是否发生，无需目标数量；每N小时倒计时不适用。</p>
+        ) : (
+          <Field label="完成方式" hint={mode === 'check' ? '每天打一次勾即完成，「30 分钟」等写在说明里' : '累计数量达到目标才算完成'}>
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} ariaLabel="完成方式" />
+          </Field>
+        )}
 
         <Field label="前置条件（可选）" error={errors['prerequisites']} hint="选了的项目必须当天先完成，本项目才解锁；可多选、可链式，服务器会拒绝成环">
           <div className="chip-row prereq-picker" role="group" aria-label="前置条件">
@@ -292,12 +319,6 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
           <Input id="p-start" type="date" value={startDate} max={today} min="2000-01-01" onChange={(event) => setStartDate(event.target.value)} />
         </Field>
 
-        <Switch
-          checked={isPrivate}
-          onChange={setIsPrivate}
-          label="仅登录可见"
-          hint="匿名访客看不到这个项目"
-        />
         {existing !== undefined ? (
           <Switch checked={archived} onChange={setArchived} label="归档" hint="归档后不再出现在今日页，历史保留" />
         ) : null}

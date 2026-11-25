@@ -91,6 +91,7 @@ export const ClockIcon = icon(
   </>,
 )
 export const DownloadIcon = icon(<path d="M12 3v12m0 0 4-4m-4 4-4-4M4 21h16" />)
+export const UploadIcon = icon(<path d="M12 15V3m0 0-4 4m4-4 4 4M4 21h16" />)
 export const SunIcon = icon(
   <>
     <circle cx="12" cy="12" r="4" />

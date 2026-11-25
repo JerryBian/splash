@@ -55,6 +55,28 @@ func TestOpenCreatesTheFileAndMigrates(t *testing.T) {
 		t.Errorf("user_version = %d, want %d", version, schemaVersion)
 	}
 
+	// Migration 3 retired the private flag and added the good/bad nature.
+	rows, err := db.sql.Query("PRAGMA table_info(projects)")
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	hasPrivate, hasNature := false, false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan table_info: %v", err)
+		}
+		hasPrivate = hasPrivate || name == "private"
+		hasNature = hasNature || name == "nature"
+	}
+	if hasPrivate || !hasNature {
+		t.Errorf("projects columns: private=%v nature=%v, want private gone / nature present", hasPrivate, hasNature)
+	}
+
 	// Reopening an existing database must not fail or lose data.
 	if _, err := db.Categories().Create(context.Background(), CategoryInput{Name: "Persistence"}); err != nil {
 		t.Fatalf("create: %v", err)
@@ -121,21 +143,17 @@ func TestDeletingACategoryUncategorizesProjects(t *testing.T) {
 	}
 }
 
-func TestProjectCRUDAndVisibility(t *testing.T) {
+func TestProjectCRUDAndArchive(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	projects := db.Projects()
 
-	public := mustProject(t, db, ProjectInput{Name: "Public", Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-01"})
-	private := mustProject(t, db, ProjectInput{Name: "Private", Private: true, Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-01"})
+	a := mustProject(t, db, ProjectInput{Name: "Water", Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-01"})
+	b := mustProject(t, db, ProjectInput{Name: "Reading", Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-01"})
 
-	anon, err := projects.List(ctx, ProjectQuery{VisibleOnly: true})
-	if err != nil || len(anon) != 1 || anon[0].ID != public.ID {
-		t.Fatalf("anonymous list = %d projects, err = %v; want only the public one", len(anon), err)
-	}
 	all, err := projects.List(ctx, ProjectQuery{})
 	if err != nil || len(all) != 2 {
-		t.Fatalf("admin list = %d, err = %v; want 2", len(all), err)
+		t.Fatalf("list = %d, err = %v; want 2", len(all), err)
 	}
 
 	// Unknown category is a field problem, not a 500.
@@ -149,11 +167,11 @@ func TestProjectCRUDAndVisibility(t *testing.T) {
 
 	// Archive hides from the default listing but keeps the data.
 	archived := true
-	if _, err := projects.Update(ctx, private.ID, ProjectPatch{Archived: &archived}, nil); err != nil {
+	if _, err := projects.Update(ctx, b.ID, ProjectPatch{Archived: &archived}, nil); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 	defaults, _ := projects.List(ctx, ProjectQuery{})
-	if len(defaults) != 1 {
+	if len(defaults) != 1 || defaults[0].ID != a.ID {
 		t.Errorf("default list = %d, want 1 (archived hidden)", len(defaults))
 	}
 	withArchived, _ := projects.List(ctx, ProjectQuery{IncludeArchived: true})
@@ -305,41 +323,55 @@ func TestStatsForProjectEndToEnd(t *testing.T) {
 	}
 }
 
-func TestOverviewRollsUpVisibleProjects(t *testing.T) {
+func TestOverviewSplitsGoodAndBad(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
 	c := mustCategory(t, db, "Health")
-	a := mustProject(t, db, ProjectInput{Name: "Water", CategoryID: c.ID.String(), Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-19"})
-	b := mustProject(t, db, ProjectInput{Name: "Private", Private: true, Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-19"})
-	for _, p := range []Project{a, b} {
-		for _, day := range []string{"2026-11-19", "2026-11-20", "2026-11-21"} {
-			if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Date: day}); err != nil {
-				t.Fatalf("checkin: %v", err)
-			}
+	good := mustProject(t, db, ProjectInput{Name: "Water", CategoryID: c.ID.String(), Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-19"})
+	bad := mustProject(t, db, ProjectInput{Name: "Late nights", Nature: NatureBad, Schedule: ScheduleDaily, Target: 1, StartDate: "2026-11-19"})
+	// The good habit is completed every day; the bad habit lapses once.
+	for _, day := range []string{"2026-11-19", "2026-11-20", "2026-11-21"} {
+		if _, err := db.Checkins().Create(ctx, good.ID, CheckinInput{Value: 1, Date: day}); err != nil {
+			t.Fatalf("good checkin: %v", err)
 		}
 	}
+	if _, err := db.Checkins().Create(ctx, bad.ID, CheckinInput{Value: 1, Date: "2026-11-20"}); err != nil {
+		t.Fatalf("bad checkin: %v", err)
+	}
 
-	overview, err := db.Stats().Overview(ctx, []Project{a}, "2026-11-21")
+	overview, err := db.Stats().Overview(ctx, []Project{good, bad}, "2026-11-21")
 	if err != nil {
 		t.Fatalf("overview: %v", err)
 	}
-	if overview.Totals.Checkins != 3 {
-		t.Errorf("checkins = %d, want 3 (visible only)", overview.Totals.Checkins)
+	// Check-ins count good progress only; the lapse is a slip, not a check-in.
+	if overview.Totals.Checkins != 3 || overview.Totals.Slips != 1 {
+		t.Errorf("totals = %+v, want 3 checkins / 1 slip", overview.Totals)
 	}
-	if overview.Today.Done != 1 || overview.Today.Total != 1 {
-		t.Errorf("today = %+v, want 1/1", overview.Today)
+	if overview.Totals.MonthCheckins != 3 || overview.Totals.MonthSlips != 1 {
+		t.Errorf("month = %+v, want 3/1", overview.Totals)
 	}
-	if overview.Totals.BestStreak != 3 {
-		t.Errorf("bestStreak = %d, want 3", overview.Totals.BestStreak)
+	// Today: the good habit is done, the bad habit is clean (held) → both done.
+	if overview.Today.Done != 2 || overview.Today.Total != 2 || overview.Today.Slipped != 0 {
+		t.Errorf("today = %+v, want 2 done / 2 total / 0 slipped", overview.Today)
 	}
-	if len(overview.Activity) != 56 {
-		t.Errorf("activity = %d days, want 56", len(overview.Activity))
+	// The activity heat counts good check-ins; the lapse rides as slips.
+	var activityGood, activitySlips int
+	for _, d := range overview.Activity {
+		activityGood += d.Count
+		activitySlips += d.Slips
 	}
-	if len(overview.Trend) != 8 {
-		t.Errorf("trend = %d weeks, want 8", len(overview.Trend))
+	if activityGood != 3 || activitySlips != 1 {
+		t.Errorf("activity = %d good / %d slips, want 3/1", activityGood, activitySlips)
 	}
+	// The category donut counts good check-ins only.
 	if len(overview.Categories) != 1 || overview.Categories[0].Name != "Health" || overview.Categories[0].Count != 3 {
 		t.Errorf("categories = %+v", overview.Categories)
+	}
+	// Leaders carry the nature so the UI can label abstention streaks apart.
+	for _, l := range overview.Leaders {
+		if l.ID == bad.ID.String() && l.Nature != NatureBad {
+			t.Errorf("bad leader nature = %q, want bad", l.Nature)
+		}
 	}
 }
 
@@ -361,18 +393,18 @@ func TestSeedDemoIsIdempotent(t *testing.T) {
 	if err != nil || len(projects) != n {
 		t.Fatalf("projects = %d, want %d", len(projects), n)
 	}
-	// The demo must include history, a private project and an interval one.
+	// The demo must include history, a bad habit and an interval one.
 	var checkins int
 	if err := db.sql.QueryRow(`SELECT COUNT(*) FROM checkins`).Scan(&checkins); err != nil || checkins == 0 {
 		t.Errorf("demo history = %d check-ins, want > 0", checkins)
 	}
-	hasPrivate, hasInterval := false, false
+	hasBad, hasInterval := false, false
 	for _, p := range projects {
-		hasPrivate = hasPrivate || p.Private
+		hasBad = hasBad || p.Nature == NatureBad
 		hasInterval = hasInterval || p.Schedule == ScheduleIntervalHours
 	}
-	if !hasPrivate || !hasInterval {
-		t.Error("demo should include a private project and an interval_hours project")
+	if !hasBad || !hasInterval {
+		t.Error("demo should include a bad habit and an interval_hours project")
 	}
 }
 
@@ -394,5 +426,61 @@ func TestDumpExportsEverything(t *testing.T) {
 	if len(dump.Categories) != 1 || len(dump.Projects) != 1 || len(dump.Checkins) != 1 || len(dump.Skips) != 1 {
 		t.Errorf("dump = %d/%d/%d/%d, want 1/1/1/1",
 			len(dump.Categories), len(dump.Projects), len(dump.Checkins), len(dump.Skips))
+	}
+}
+
+func TestImportRestoresExportAdditively(t *testing.T) {
+	ctx := context.Background()
+	src := openTestDB(t)
+	c := mustCategory(t, src, "Health")
+	p := mustProject(t, src, ProjectInput{Name: "Water", CategoryID: c.ID.String(), Schedule: ScheduleDaily, Target: 8, Unit: "cups", StartDate: "2026-11-01"})
+	if _, err := src.Checkins().Create(ctx, p.ID, CheckinInput{Value: 3, Date: "2026-11-10"}); err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	if _, err := src.Skips().Create(ctx, p.ID, SkipInput{Date: "2026-11-11"}); err != nil {
+		t.Fatalf("skip: %v", err)
+	}
+	dump, err := src.Dump(ctx)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+
+	dst := openTestDB(t)
+	counts, err := dst.Import(ctx, dump)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if counts.Categories != 1 || counts.Projects != 1 || counts.Checkins != 1 || counts.Skips != 1 {
+		t.Errorf("counts = %+v, want 1/1/1/1", counts)
+	}
+	// The project keeps its original id, so references and history line up.
+	got, err := dst.Projects().Get(ctx, p.ID)
+	if err != nil || got.Name != "Water" || got.CategoryID != c.ID {
+		t.Errorf("imported project = %+v, err = %v", got, err)
+	}
+
+	// Re-importing the same backup is a no-op (additive by id).
+	again, err := dst.Import(ctx, dump)
+	if err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+	if again != (ImportCounts{}) {
+		t.Errorf("re-import counts = %+v, want all zero", again)
+	}
+}
+
+func TestImportRejectsDanglingReferences(t *testing.T) {
+	ctx := context.Background()
+	dst := openTestDB(t)
+	bad := ExportData{
+		Checkins: []Checkin{{ID: uuid.NewV7(), ProjectID: uuid.NewV7(), Value: 1, LocalDate: "2026-11-10"}},
+	}
+	if _, err := dst.Import(ctx, bad); !errors.Is(err, ErrValidation) {
+		t.Errorf("dangling checkin: err = %v, want ErrValidation", err)
+	}
+	// Nothing was applied.
+	n, _ := dst.Checkins().Aggregates(ctx, uuid.NewV7(), "", "")
+	if len(n) != 0 {
+		t.Error("a rejected import left rows behind")
 	}
 }

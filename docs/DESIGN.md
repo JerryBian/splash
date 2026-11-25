@@ -39,12 +39,23 @@ timezone), not the server's clock. Instants (`checked_at`) drive only the
 interval-hours countdown and history ordering. A backfill sets `local_date` to
 the requested day and `checked_at` to noon UTC of that day.
 
-## Private means invisible
+## Login means everything
 
-Anonymous reads of a private project answer `404` on every path — list, detail,
-stats, check-ins, skips — so existence is not leaked. Writes answer `401`.
-Login failures are uniform and rate-limited per IP; passwords are compared
-constant-time.
+The whole service sits behind one administrator. Every data route — list,
+detail, stats, check-ins, skips, categories, overview, export — answers `401`
+without a session; only login/logout/me and the probes are public. There is no
+per-project visibility flag. Login failures are uniform and rate-limited per
+IP; passwords are compared constant-time.
+
+## Good habits and bad habits
+
+A project's `nature` is `good` (build it) or `bad` (break it). The schedule
+engine inverts the verdicts for a bad habit: a check-in records a lapse, any
+occurrence spoils the period (`missed`), a clean ended period is the success
+(`done`), and the streak counts periods survived without a lapse. The overview
+tallies good-habit check-ins and bad-habit lapses (slips) separately so a lapse
+never inflates an achievement number. Bad habits are always check mode and
+cannot use `interval_hours`.
 
 ## The UI shell
 

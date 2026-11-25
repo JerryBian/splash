@@ -32,7 +32,7 @@ type Projects struct{ db *DB }
 
 var _ ProjectStore = (*Projects)(nil)
 
-const projectColumns = `id, name, description, icon, color, category_id, private, schedule, mode,
+const projectColumns = `id, name, description, icon, color, category_id, nature, schedule, mode,
 	target, unit, weekdays, interval_value, start_date, archived, created_at, updated_at, version`
 
 // Create validates and stores a new project.
@@ -71,7 +71,7 @@ func (s *Projects) Create(ctx context.Context, in ProjectInput) (Project, error)
 		Icon:          n.Icon,
 		Color:         n.Color,
 		CategoryID:    categoryID,
-		Private:       n.Private,
+		Nature:        n.Nature,
 		Schedule:      n.Schedule,
 		Mode:          n.Mode,
 		Target:        n.Target,
@@ -87,7 +87,7 @@ func (s *Projects) Create(ctx context.Context, in ProjectInput) (Project, error)
 	_, err := s.db.sql.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID.String(), p.Name, p.Description, p.Icon, p.Color, categoryArg(p.CategoryID),
-		boolInt(p.Private), string(p.Schedule), p.Mode, p.Target, p.Unit, weekdaysCSV(p.Weekdays),
+		p.Nature, string(p.Schedule), p.Mode, p.Target, p.Unit, weekdaysCSV(p.Weekdays),
 		p.Interval, p.StartDate, boolInt(p.Archived), toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
 	if err != nil {
 		return Project{}, fmt.Errorf("create project: %w", err)
@@ -98,8 +98,8 @@ func (s *Projects) Create(ctx context.Context, in ProjectInput) (Project, error)
 	return p, nil
 }
 
-// Get returns one project, or ErrNotFound. Visibility is the caller's job:
-// the API layer decides whether a private project may be seen at all.
+// Get returns one project, or ErrNotFound. Access control is the API layer's
+// job: every project is readable by the signed-in administrator.
 func (s *Projects) Get(ctx context.Context, id uuid.UUID) (Project, error) {
 	if id == uuid.Nil() {
 		return Project{}, fmt.Errorf("%w: nil identifier", ErrNotFound)
@@ -121,9 +121,6 @@ func (s *Projects) Get(ctx context.Context, id uuid.UUID) (Project, error) {
 func (s *Projects) List(ctx context.Context, q ProjectQuery) ([]Project, error) {
 	where := []string{"1=1"}
 	args := []any{}
-	if q.VisibleOnly {
-		where = append(where, "private = 0")
-	}
 	if !q.IncludeArchived {
 		where = append(where, "archived = 0")
 	}
@@ -200,12 +197,12 @@ func (s *Projects) Update(ctx context.Context, id uuid.UUID, patch ProjectPatch,
 	next.Version = current.Version + 1
 
 	res, err := s.db.sql.ExecContext(ctx, `UPDATE projects SET
-		name = ?, description = ?, icon = ?, color = ?, category_id = ?, private = ?, schedule = ?, mode = ?,
+		name = ?, description = ?, icon = ?, color = ?, category_id = ?, nature = ?, schedule = ?, mode = ?,
 		target = ?, unit = ?, weekdays = ?, interval_value = ?, start_date = ?, archived = ?,
 		updated_at = ?, version = ?
 		WHERE id = ? AND version = ?`,
 		next.Name, next.Description, next.Icon, next.Color, categoryArg(next.CategoryID),
-		boolInt(next.Private), string(next.Schedule), next.Mode, next.Target, next.Unit, weekdaysCSV(next.Weekdays),
+		next.Nature, string(next.Schedule), next.Mode, next.Target, next.Unit, weekdaysCSV(next.Weekdays),
 		next.Interval, next.StartDate, boolInt(next.Archived), toMillis(next.UpdatedAt), next.Version,
 		id.String(), current.Version)
 	if err != nil {
@@ -247,17 +244,16 @@ func scanProject(row rowScanner) (Project, error) {
 	var p Project
 	var id string
 	var categoryID sql.NullString
-	var private, archived int
+	var archived int
 	var weekdays string
 	var createdAt, updatedAt int64
 	if err := row.Scan(&id, &p.Name, &p.Description, &p.Icon, &p.Color, &categoryID,
-		&private, &p.Schedule, &p.Mode, &p.Target, &p.Unit, &weekdays, &p.Interval, &p.StartDate,
+		&p.Nature, &p.Schedule, &p.Mode, &p.Target, &p.Unit, &weekdays, &p.Interval, &p.StartDate,
 		&archived, &createdAt, &updatedAt, &p.Version); err != nil {
 		return Project{}, err
 	}
 	p.ID, _ = uuid.Parse(id)
 	p.CategoryID = scanCategoryID(categoryID)
-	p.Private = private != 0
 	p.Archived = archived != 0
 	p.Weekdays = parseWeekdaysCSV(weekdays)
 	p.CreatedAt = fromMillis(createdAt)

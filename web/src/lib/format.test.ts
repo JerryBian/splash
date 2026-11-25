@@ -59,7 +59,7 @@ describe('formatRelativeTime', () => {
 })
 
 describe('scheduleLabel', () => {
-  const base = { target: 1, unit: '次', weekdays: [] as number[], interval: 0 }
+  const base = { target: 1, unit: '次', weekdays: [] as number[], interval: 0, nature: 'good' as const }
   it('describes every schedule family', () => {
     expect(scheduleLabel({ ...base, schedule: 'daily', target: 8, unit: '杯' })).toBe('每天 8 杯')
     expect(scheduleLabel({ ...base, schedule: 'weekdays', weekdays: [5, 1, 3] })).toBe('每周一、三、五 1 次')
@@ -67,6 +67,10 @@ describe('scheduleLabel', () => {
     expect(scheduleLabel({ ...base, schedule: 'monthly', target: 4 })).toBe('每月 4 次')
     expect(scheduleLabel({ ...base, schedule: 'interval_days', interval: 3 })).toBe('每 3 天 1 次')
     expect(scheduleLabel({ ...base, schedule: 'interval_hours', interval: 2 })).toBe('每 2 小时')
+  })
+  it('phrases a bad habit as avoidance', () => {
+    expect(scheduleLabel({ ...base, schedule: 'daily', nature: 'bad' })).toBe('每天 避免')
+    expect(scheduleLabel({ ...base, schedule: 'weekly', nature: 'bad' })).toBe('每周 避免')
   })
   it('names the families for pickers', () => {
     expect(scheduleName('daily')).toBe('每天')
@@ -88,9 +92,12 @@ describe('periodLabel', () => {
 
 describe('progressLabel', () => {
   it('shows value over target with the unit', () => {
-    expect(progressLabel({ schedule: 'daily', unit: '杯' }, 5, 8)).toBe('5 / 8 杯')
+    expect(progressLabel({ schedule: 'daily', unit: '杯', nature: 'good' }, 5, 8)).toBe('5 / 8 杯')
   })
   it('shows a plain count for interval projects', () => {
-    expect(progressLabel({ schedule: 'interval_hours', unit: '次' }, 3, 0)).toBe('3 次')
+    expect(progressLabel({ schedule: 'interval_hours', unit: '次', nature: 'good' }, 3, 0)).toBe('3 次')
+  })
+  it('shows a lapse count for a bad habit', () => {
+    expect(progressLabel({ schedule: 'daily', unit: '次', nature: 'bad' }, 2, 1)).toBe('2 次')
   })
 })

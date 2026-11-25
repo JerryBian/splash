@@ -130,6 +130,31 @@ func TestSpaHandlerRejectsAPIPaths(t *testing.T) {
 	}
 }
 
+func TestSpaHandlerDoesNotServePathTraversal(t *testing.T) {
+	handler := spaHandler(builtAssets(), []string{"/api/"})
+
+	// Traversal sequences must never escape the embedded tree. fs.ValidPath
+	// rejects "..", so these fall through to the app shell rather than reading
+	// an arbitrary file (and net/http cleans dirty paths before routing anyway).
+	for _, path := range []string{
+		"/../secret",
+		"/assets/../../secret",
+		"/..%2fsecret",
+		"/assets/app-ABC123.js/../../../secret",
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		body := rec.Body.String()
+		if strings.Contains(body, "secret") && !strings.Contains(body, `id="root"`) {
+			t.Errorf("path %q served unexpected content: %s", path, body)
+		}
+		// Whatever the answer, it must not be a 500 from a panicked fs call.
+		if rec.Code == http.StatusInternalServerError {
+			t.Errorf("path %q caused a 500", path)
+		}
+	}
+}
+
 func TestIsAPIPath(t *testing.T) {
 	tests := []struct {
 		path string

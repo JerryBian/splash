@@ -1,22 +1,17 @@
 import { useState } from 'react'
 import { api } from '../api/client'
-import { useApp } from '../hooks/useApp'
 import { describeError } from '../lib/errors'
 import { SealMark } from './icons'
-import { Sheet } from './overlays'
 import { Button, Field, Input } from './ui'
 
-function closeLogin(): void {
-  window.history.back()
-}
-
 /**
- * The admin door. One account, credentials from the server's environment;
- * failures answer uniformly and the server rate-limits guesses. On success
- * the whole app re-bootstraps its data because visibility just changed.
+ * The login gate: the whole screen when nobody is signed in. Every page and
+ * every data route requires the administrator, so this is the only thing an
+ * anonymous visitor sees. One account, credentials from the server's
+ * environment; failures answer uniformly and the server rate-limits guesses.
+ * On success the app re-bootstraps into the signed-in shell.
  */
-export function LoginView() {
-  const { refreshSession, toast } = useApp()
+export function LoginGate({ onSuccess }: { onSuccess: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -30,10 +25,8 @@ export function LoginView() {
     setBusy(true)
     setError('')
     try {
-      const session = await api.login(username.trim(), password)
-      await refreshSession()
-      toast(`欢迎回来，${session.username ?? '管理员'}`, 'ok')
-      closeLogin()
+      await api.login(username.trim(), password)
+      onSuccess()
     } catch (caught) {
       setError(describeError(caught))
       setBusy(false)
@@ -41,46 +34,52 @@ export function LoginView() {
   }
 
   return (
-    <Sheet open onClose={closeLogin} title="管理员登录">
-      <div className="login-hero" aria-hidden="true">
-        <SealMark size={44} />
+    <div className="boot login-gate">
+      <div className="boot-bar">
+        <SealMark size={24} className="boot-seal" />
+        <span className="wordmark">水花打卡</span>
       </div>
-      <p className="sheet-note login-note">
-        登录后可打卡、管理项目，并查看仅登录可见的项目。账户由服务器环境变量配置。
-      </p>
-      <form
-        className="login-form"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void submit()
-        }}
-      >
-        <Field label="用户名" htmlFor="login-username">
-          <Input
-            id="login-username"
-            value={username}
-            autoComplete="username"
-            onChange={(event) => setUsername(event.target.value)}
-          />
-        </Field>
-        <Field label="密码" htmlFor="login-password">
-          <Input
-            id="login-password"
-            type="password"
-            value={password}
-            autoComplete="current-password"
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </Field>
-        {error !== '' ? (
-          <p className="form-error" role="alert" data-shake="true">
-            {error}
-          </p>
-        ) : null}
-        <Button type="submit" pending={busy} className="login-submit">
-          登录
-        </Button>
-      </form>
-    </Sheet>
+      <div className="boot-panel">
+        <div className="login-hero" aria-hidden="true">
+          <SealMark size={44} />
+        </div>
+        <h2 className="panel-heading">管理员登录</h2>
+        <p className="boot-message">登录后即可打卡、管理项目与查看统计。账户由服务器环境变量配置。</p>
+        <form
+          className="login-form"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault()
+            void submit()
+          }}
+        >
+          <Field label="用户名" htmlFor="login-username">
+            <Input
+              id="login-username"
+              value={username}
+              autoComplete="username"
+              onChange={(event) => setUsername(event.target.value)}
+            />
+          </Field>
+          <Field label="密码" htmlFor="login-password">
+            <Input
+              id="login-password"
+              type="password"
+              value={password}
+              autoComplete="current-password"
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          {error !== '' ? (
+            <p className="form-error" role="alert" data-shake="true">
+              {error}
+            </p>
+          ) : null}
+          <Button type="submit" pending={busy} className="login-submit">
+            登录
+          </Button>
+        </form>
+      </div>
+    </div>
   )
 }

@@ -62,6 +62,10 @@ func (a *API) mapError(err error) *httpx.Error {
 		return httpx.Errorf(http.StatusRequestEntityTooLarge, httpx.CodePayloadTooLarge,
 			"request body exceeds the %d byte limit", a.maxBody).WithErr(err)
 	}
+	if httpx.IsUnsupportedMediaType(err) {
+		return httpx.Errorf(http.StatusUnsupportedMediaType, httpx.CodeUnsupportedMedia,
+			"request body must be application/json").WithErr(err)
+	}
 	if httpx.IsMalformedJSON(err) {
 		return httpx.Errorf(http.StatusBadRequest, httpx.CodeInvalidJSON,
 			"request body is not valid JSON").WithErr(err)

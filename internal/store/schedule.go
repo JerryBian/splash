@@ -27,6 +27,16 @@ const maxPeriodWalk = 12000
 //	due      interval_hours: the countdown has elapsed, check in now
 //	waiting  interval_hours: counting down to the next check-in
 //	none     outside the project's life, or no day-level verdict (week/month)
+//
+// For a BAD project (Nature == NatureBad) the same tokens carry the inverted
+// verdict, because the goal is abstention rather than accumulation:
+//
+//	done     no lapse recorded — the period was survived (or is clean so far)
+//	missed   a lapse was recorded — the period is spoiled, even while open
+//	pending  unused (a clean open period reads as done, not waiting)
+//
+// The streak therefore counts survived periods, and CompletionRate is the
+// share of periods kept clean. partial/due/waiting never occur for bad habits.
 const (
 	StatusDone    = "done"
 	StatusPartial = "partial"
@@ -206,7 +216,10 @@ type Summary struct {
 	Unmet []string `json:"unmet"`
 }
 
-// Totals is the lifetime roll-up shown on the detail page.
+// Totals is the lifetime roll-up shown on the detail page. For a bad project
+// the tokens invert with the nature: Checkins/Value/ActiveDays count lapse
+// records, Done counts survived periods, Missed counts spoiled ones, and
+// CompletionRate is the share kept clean.
 type Totals struct {
 	Checkins       int     `json:"checkins"`
 	Value          float64 `json:"value"`
@@ -214,7 +227,7 @@ type Totals struct {
 	Done           int     `json:"done"`
 	Missed         int     `json:"missed"`
 	Skipped        int     `json:"skipped"`
-	CompletionRate float64 `json:"completionRate"` // done / (done + missed), 0 when nothing ended yet
+	CompletionRate float64 `json:"completionRate"` // done / (done + missed); the clean rate for bad habits
 	OnTimeRate     float64 `json:"onTimeRate"`     // interval_hours only
 	LateCount      int     `json:"lateCount"`      // interval_hours only
 	Backfilled     int     `json:"backfilled"`     // check-ins recorded after their credited day
@@ -334,16 +347,33 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 		// week/month with a skip inside is only excused once it ends, because
 		// it can still be completed.
 		excusedNow := excused && (ended || (per.Start == per.End && per.End == in.Today))
-		switch {
-		case value >= p.Target:
-			out.Totals.Done++
-			run++
-			best = max(best, run)
-		case excusedNow:
-			out.Totals.Skipped++
-		case ended:
-			out.Totals.Missed++
-			run = 0
+		if p.Nature == NatureBad {
+			// Inverted: a lapse spoils the period outright (even while open),
+			// and only a fully survived, unexcused period extends the run. The
+			// still-open clean period is neither done nor missed yet.
+			switch {
+			case value > 0:
+				out.Totals.Missed++
+				run = 0
+			case excusedNow:
+				out.Totals.Skipped++
+			case ended:
+				out.Totals.Done++
+				run++
+				best = max(best, run)
+			}
+		} else {
+			switch {
+			case value >= p.Target:
+				out.Totals.Done++
+				run++
+				best = max(best, run)
+			case excusedNow:
+				out.Totals.Skipped++
+			case ended:
+				out.Totals.Missed++
+				run = 0
+			}
 		}
 		per = NextPeriod(p, per)
 	}
@@ -352,20 +382,37 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 	// Summary for the current period.
 	value, count := periodValue(in, current)
 	todayAgg := in.Aggregates[in.Today]
+	_, skippedToday := in.Skips[in.Today]
 	status := StatusPending
-	switch {
-	case value >= p.Target:
-		status = StatusDone
-	case !ScheduledOn(p, in.Today):
-		status = StatusRest
-	case p.Schedule == ScheduleDaily || p.Schedule == ScheduleWeekdays:
-		if _, skipped := in.Skips[in.Today]; skipped {
+	if p.Nature == NatureBad {
+		// A clean period reads as done ("held") whether it has ended or is
+		// still open, so the Today ring counts abstention as success. A lapse
+		// is terminal and reads as missed immediately.
+		switch {
+		case value > 0:
+			status = StatusMissed
+		case !ScheduledOn(p, in.Today):
+			status = StatusRest
+		case (p.Schedule == ScheduleDaily || p.Schedule == ScheduleWeekdays) && skippedToday:
 			status = StatusSkipped
-		} else if value > 0 {
+		default:
+			status = StatusDone
+		}
+	} else {
+		switch {
+		case value >= p.Target:
+			status = StatusDone
+		case !ScheduledOn(p, in.Today):
+			status = StatusRest
+		case p.Schedule == ScheduleDaily || p.Schedule == ScheduleWeekdays:
+			if skippedToday {
+				status = StatusSkipped
+			} else if value > 0 {
+				status = StatusPartial
+			}
+		case value > 0:
 			status = StatusPartial
 		}
-	case value > 0:
-		status = StatusPartial
 	}
 	out.Summary = Summary{
 		Status:      status,
@@ -497,6 +544,24 @@ func buildHeatmap(in StatsInput) []HeatCell {
 		agg := in.Aggregates[d]
 		cell := HeatCell{Date: d, Value: agg.Value, Count: agg.Count, Status: StatusNone}
 		_, skipped := in.Skips[d]
+		if p.Nature == NatureBad {
+			// Day-level abstention calendar, uniform across schedules: a lapse
+			// marks the day (×), a clean day fills with the ink, rest and excuse
+			// keep their shapes. The period verdict still lives in the bars.
+			switch {
+			case d < p.StartDate:
+			case !ScheduledOn(p, d):
+				cell.Status = StatusRest
+			case agg.Value > 0:
+				cell.Status = StatusMissed
+			case skipped:
+				cell.Status = StatusSkipped
+			default:
+				cell.Status = StatusDone
+			}
+			cells = append(cells, cell)
+			continue
+		}
 		switch {
 		case d < p.StartDate:
 			// before the project existed
@@ -589,21 +654,38 @@ func buildPeriodBars(in StatsInput) []PeriodBar {
 		value, _ := periodValue(in, per)
 		excused := periodHasSkip(in, per)
 		status := StatusPending
-		switch {
-		case !ScheduledOn(p, per.Start) && p.Schedule == ScheduleWeekdays:
-			status = StatusRest
-		case value >= p.Target:
-			status = StatusDone
-		case per.End < in.Today && excused:
-			status = StatusSkipped
-		case per.End < in.Today:
-			status = StatusMissed
-		case value > 0:
-			status = StatusPartial
+		target := p.Target
+		if p.Nature == NatureBad {
+			// No goal line: the bar's height is the lapse count, and a clean
+			// period (open or ended) reads as done.
+			target = 0
+			switch {
+			case !ScheduledOn(p, per.Start) && p.Schedule == ScheduleWeekdays:
+				status = StatusRest
+			case value > 0:
+				status = StatusMissed
+			case per.End < in.Today && excused:
+				status = StatusSkipped
+			default:
+				status = StatusDone
+			}
+		} else {
+			switch {
+			case !ScheduledOn(p, per.Start) && p.Schedule == ScheduleWeekdays:
+				status = StatusRest
+			case value >= p.Target:
+				status = StatusDone
+			case per.End < in.Today && excused:
+				status = StatusSkipped
+			case per.End < in.Today:
+				status = StatusMissed
+			case value > 0:
+				status = StatusPartial
+			}
 		}
 		bars = append(bars, PeriodBar{
 			Key: per.Key, Start: per.Start, End: per.End,
-			Value: value, Target: p.Target, Status: status,
+			Value: value, Target: target, Status: status,
 		})
 		per = NextPeriod(p, per)
 	}
@@ -649,7 +731,9 @@ func rate(num, den int) float64 {
 // day, for the purpose of gating a dependent project. Resolved means: done,
 // excused (skip), not scheduled (rest), or retired (archived). A pending or
 // partial day is NOT resolved, so checking the dependent project then is a
-// prerequisite violation. Pure: aggregates and skips are supplied by caller.
+// prerequisite violation. For a BAD prerequisite, resolved means the opposite
+// of a lapse: the day is clean only when nothing was recorded. Pure: aggregates
+// and skips are supplied by caller.
 func PrereqSatisfied(p Project, day string, agg map[string]DayAggregate, skips map[string]string) bool {
 	if p.Archived {
 		return true
@@ -673,6 +757,9 @@ func PrereqSatisfied(p Project, day string, agg map[string]DayAggregate, skips m
 	var value float64
 	for d := from; d <= to; d = AddDays(d, 1) {
 		value += agg[d].Value
+	}
+	if p.Nature == NatureBad {
+		return value == 0
 	}
 	return value >= p.Target
 }

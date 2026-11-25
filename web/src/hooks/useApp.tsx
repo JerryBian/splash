@@ -8,10 +8,10 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { api } from '../api/client'
+import { api, setUnauthorizedHandler } from '../api/client'
 import type { Bootstrap, Category, Overview, Project, Session } from '../api/types'
 import { localToday } from '../lib/date'
-import { describeError, isUnauthorized } from '../lib/errors'
+import { describeError } from '../lib/errors'
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemeChoice } from '../lib/theme'
 
 export type ToastTone = 'ok' | 'error' | 'info'
@@ -28,13 +28,12 @@ type AppContextValue = {
   categories: Category[]
   overview: Overview
   today: string
-  isAdmin: boolean
   theme: ThemeChoice
   setTheme: (choice: ThemeChoice) => void
   /** Re-reads projects, categories and the overview after a mutation. */
   refresh: () => Promise<void>
-  /** Re-reads the session, then the data (visibility may have changed). */
-  refreshSession: () => Promise<void>
+  /** Signs out and returns to the login gate. */
+  logout: () => Promise<void>
   toasts: Toast[]
   toast: (message: string, tone?: ToastTone) => void
   dismissToast: (id: number) => void
@@ -53,7 +52,25 @@ export function useApp(): AppContextValue {
 
 let toastSeq = 0
 
-export function AppProvider({ initial, children }: { initial: Bootstrap; children: ReactNode }) {
+const noop = () => {}
+
+/**
+ * The signed-in app store. Everything here belongs to the administrator — the
+ * login gate lives above this provider, so there is no anonymous branch. When
+ * any request answers 401 (the idle session expired), onSignedOut tears the
+ * app down back to the gate rather than stranding the user on dead screens.
+ * onSignedOut defaults to a noop so isolated component tests can render the
+ * provider without wiring the gate.
+ */
+export function AppProvider({
+  initial,
+  onSignedOut = noop,
+  children,
+}: {
+  initial: Bootstrap
+  onSignedOut?: () => void
+  children: ReactNode
+}) {
   const [session, setSession] = useState<Session>(initial.session)
   const [projects, setProjects] = useState<Project[]>(initial.projects)
   const [categories, setCategories] = useState<Category[]>(initial.categories)
@@ -83,6 +100,13 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
     }
   }, [])
 
+  // A 401 anywhere (except the auth door itself) means the session expired:
+  // return to the gate. Registered for the life of the signed-in app.
+  useEffect(() => {
+    setUnauthorizedHandler(onSignedOut)
+    return () => setUnauthorizedHandler(null)
+  }, [onSignedOut])
+
   const refresh = useCallback(async () => {
     const day = localToday()
     try {
@@ -96,26 +120,20 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
       setCategories(cats)
       setOverview(ov)
     } catch (error) {
-      if (isUnauthorized(error)) {
-        // The session expired mid-use: fall back to the anonymous view rather
-        // than stranding the user on a screen of errors.
-        setSession({ role: 'anonymous' })
-        toast('登录已过期，已切换为访客视图', 'info')
-        return
-      }
+      // The unauthorized interceptor already handles an expired session; any
+      // other failure is surfaced as a toast without losing the current view.
       toast(describeError(error), 'error')
     }
   }, [toast])
 
-  const refreshSession = useCallback(async () => {
+  const logout = useCallback(async () => {
+    setSession({ role: 'anonymous' })
     try {
-      const next = await api.me()
-      setSession(next)
-    } catch {
-      setSession({ role: 'anonymous' })
+      await api.logout()
+    } finally {
+      onSignedOut()
     }
-    await refresh()
-  }, [refresh])
+  }, [onSignedOut])
 
   const setTheme = useCallback((choice: ThemeChoice) => {
     setThemeState(choice)
@@ -137,16 +155,15 @@ export function AppProvider({ initial, children }: { initial: Bootstrap; childre
       categories,
       overview,
       today,
-      isAdmin: session.role === 'admin',
       theme,
       setTheme,
       refresh,
-      refreshSession,
+      logout,
       toasts,
       toast,
       dismissToast,
     }),
-    [session, projects, categories, overview, today, theme, setTheme, refresh, refreshSession, toasts, toast, dismissToast],
+    [session, projects, categories, overview, today, theme, setTheme, refresh, logout, toasts, toast, dismissToast],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>
