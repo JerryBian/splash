@@ -355,7 +355,6 @@ code {
 /* ------------------------------------------------------------------ today */
 
 .today-head {
-  position: relative;
   display: grid;
   grid-template-columns: 1fr auto;
   grid-template-areas:
@@ -366,28 +365,18 @@ code {
   margin: 2px 0 10px;
 }
 
-/* A faint brand seal behind the header: personality without layout weight. */
-.today-watermark {
-  position: absolute;
-  top: -28px;
-  right: -6px;
-  color: var(--brand);
-  opacity: 0.06;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.today-date,
-.today-ring,
-.week-strip {
-  position: relative;
-  z-index: 1;
-}
-
 .today-greeting {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12.5px;
   color: var(--muted);
   margin: 0 0 12px;
+}
+
+.greeting-seal {
+  flex: none;
+  color: var(--brand);
 }
 
 .today-date {
@@ -3575,7 +3564,12 @@ button.heat-cell:hover {
     display: flex;
   }
 
-  .sidebar-foot .topbar-role,
+  .sidebar-foot .topbar-role {
+    display: flex;
+    width: 100%;
+    justify-content: center;
+  }
+
   .app-body {
     min-width: 0;
     min-height: 100dvh;

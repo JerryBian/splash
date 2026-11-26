@@ -128,7 +128,6 @@ export function TodayView() {
   return (
     <div className="view">
       <header className="today-head">
-        <SealMark size={132} className="today-watermark" />
         <div className="today-date">
           <span className="today-number">{dayNumber}</span>
           <span className="today-meta">
@@ -162,8 +161,11 @@ export function TodayView() {
       </header>
 
       <p className="today-greeting">
-        {greeting()}，把每一天盖成印章。
-        {overview.today.slipped > 0 ? `今天有 ${overview.today.slipped} 个坏习惯破戒了，明天继续守住。` : ''}
+        <SealMark size={14} className="greeting-seal" />
+        <span>
+          {greeting()}，把每一天盖成印章。
+          {overview.today.slipped > 0 ? ` 今天有 ${overview.today.slipped} 个坏习惯破戒了，明天继续守住。` : ''}
+        </span>
       </p>
 
       {categories.length > 0 ? (
