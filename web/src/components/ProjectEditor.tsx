@@ -8,7 +8,8 @@ import { describeError, fieldErrorsFrom } from '../lib/errors'
 import { pickUnusedColor } from '../lib/palette'
 import { AppearanceField } from './AppearancePicker'
 import { AlertIcon, ChevronLeftIcon } from './icons'
-import { Button, Chip, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
+import { MultiSelect } from './MultiSelect'
+import { Button, Field, IconButton, Input, Segmented, Switch, Textarea } from './ui'
 
 const SCHEDULE_OPTIONS: { value: ScheduleType; label: string }[] = [
   { value: 'daily', label: '每天' },
@@ -24,7 +25,6 @@ const UNIT_SUGGESTIONS = ['次', '杯', '分钟', '公里', '个', '页', '小�
 const MODE_OPTIONS: { value: ProjectMode; label: string }[] = [
   { value: 'check', label: '打勾一次' },
   { value: 'value', label: '累计数量' },
-  { value: 'time', label: '记录时间' },
 ]
 
 const NATURE_OPTIONS: { value: ProjectNature; label: string }[] = [
@@ -68,12 +68,19 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   const [schedule, setSchedule] = useState<ScheduleType>(existing?.schedule ?? 'daily')
   const [mode, setMode] = useState<ProjectMode>(existing?.mode ?? 'check')
   const [prerequisites, setPrerequisites] = useState<string[]>(existing?.prerequisites ?? [])
+  const [postrequisites, setPostrequisites] = useState<string[]>(existing?.postrequisites ?? [])
   const [target, setTarget] = useState(existing !== undefined && existing.target > 0 ? String(existing.target) : '1')
   const [unit, setUnit] = useState(existing?.unit ?? '次')
   const [weekdays, setWeekdays] = useState<number[]>(existing?.weekdays ?? [1, 3, 5])
   const [interval, setInterval] = useState(existing !== undefined && existing.interval > 0 ? String(existing.interval) : '2')
-  const [targetTime, setTargetTime] = useState(existing?.targetTime ?? '')
-  const [reminderTime, setReminderTime] = useState(existing?.reminderTime ?? '')
+  const [notePrompt, setNotePrompt] = useState(existing?.notePrompt ?? '')
+  const linkOptions = useMemo(
+    () =>
+      projects
+        .filter((project) => project.id !== projectId)
+        .map((project) => ({ id: project.id, icon: project.icon, name: project.name })),
+    [projects, projectId],
+  )
   // Default to the server's day, not the device clock: the two can differ
   // around midnight/timezones, and a start date past the server's today would
   // make the native date input invalid and silently block submit.
@@ -87,17 +94,13 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   useSessionHeartbeat(true)
 
   const bad = nature === 'bad'
-  const timeMode = mode === 'time'
-  // Neither a bad habit nor a time-mode habit has a "check in every N hours"
-  // obligation, so that family is not offered for them. Memoized (and kept
-  // above the early return) so the hook order is stable and the Segmented prop
-  // keeps a stable identity across renders.
+  // A bad habit has no "check in every N hours" obligation, so that family is
+  // not offered; the rest of the cadences still describe when to avoid it.
+  // Memoized (and kept above the early return) so the hook order is stable and
+  // the Segmented prop keeps a stable identity across renders.
   const scheduleOptions = useMemo(
-    () =>
-      bad || timeMode
-        ? SCHEDULE_OPTIONS.filter((o) => o.value !== 'interval_hours')
-        : SCHEDULE_OPTIONS,
-    [bad, timeMode],
+    () => (bad ? SCHEDULE_OPTIONS.filter((o) => o.value !== 'interval_hours') : SCHEDULE_OPTIONS),
+    [bad],
   )
 
   if (projectId !== 'new' && existing === undefined) {
@@ -118,14 +121,22 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
     setNature(next)
     if (next === 'bad') {
       setMode('check')
+      // A bad habit has no completion event to trigger a follow-up commitment.
+      setPostrequisites([])
       if (schedule === 'interval_hours') setSchedule('daily')
     }
   }
 
-  const chooseMode = (next: ProjectMode) => {
-    setMode(next)
-    // A clock-time record has no meaning on a rolling countdown.
-    if (next === 'time' && schedule === 'interval_hours') setSchedule('daily')
+  // The two directions are one graph: picking a project on one side removes it
+  // from the other, so a pair can never be both a prerequisite and a follow-up.
+  const togglePrereq = (id: string) => {
+    setPostrequisites((cur) => cur.filter((x) => x !== id))
+    setPrerequisites((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
+  }
+
+  const togglePost = (id: string) => {
+    setPrerequisites((cur) => cur.filter((x) => x !== id))
+    setPostrequisites((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
   }
 
   const validate = (): Record<string, string> => {
@@ -167,10 +178,10 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
       unit: bad ? '次' : unit.trim() === '' ? '次' : unit.trim(),
       weekdays: needsWeekdays ? weekdays : [],
       interval: isIntervalHours || isIntervalDays ? Number(interval) : 0,
-      targetTime: !bad && timeMode ? targetTime : '',
-      reminderTime,
+      notePrompt,
       startDate,
       prerequisites,
+      postrequisites: bad ? [] : postrequisites,
     }
     try {
       if (existing === undefined) {
@@ -237,6 +248,21 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
           />
         </Field>
 
+        <Field
+          label="补充说明提示（可选）"
+          htmlFor="p-note-prompt"
+          error={errors['notePrompt']}
+          hint="打卡时显示为补充说明的标题，例如「什么时候睡的？睡了多久？」"
+        >
+          <Input
+            id="p-note-prompt"
+            value={notePrompt}
+            maxLength={40}
+            placeholder="例如：什么时候睡的？睡了多久？"
+            onChange={(event) => setNotePrompt(event.target.value)}
+          />
+        </Field>
+
         <Field label="分类" htmlFor="p-category">
           <select id="p-category" className="input" value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
             <option value="">未分类</option>
@@ -264,43 +290,35 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
         ) : (
           <Field
             label="完成方式"
-            hint={
-              mode === 'check'
-                ? '每天打一次勾即完成，「30 分钟」等写在说明里'
-                : mode === 'time'
-                  ? '每次打卡记录一个时间点（如入睡时间），可设准时目标'
-                  : '累计数量达到目标才算完成'
-            }
+            hint={mode === 'check' ? '每天打一次勾即完成，「30 分钟」等写在说明里' : '累计数量达到目标才算完成'}
           >
-            <Segmented options={MODE_OPTIONS} value={mode} onChange={chooseMode} ariaLabel="完成方式" />
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} ariaLabel="完成方式" />
           </Field>
         )}
 
-        {!bad && timeMode ? (
-          <Field label="准时目标（可选）" htmlFor="p-target-time" error={errors['targetTime']} hint="如 23:00 前睡觉；留空则只记录时间。跨午夜的截止时间（如 00:30）按夜间时段判断">
-            <Input id="p-target-time" type="time" value={targetTime} onChange={(event) => setTargetTime(event.target.value)} />
-          </Field>
-        ) : null}
-
-        <Field label="前置条件（可选）" error={errors['prerequisites']} hint="选了的项目必须当天先完成，本项目才解锁；可多选、可链式，服务器会拒绝成环">
-          <div className="chip-row prereq-picker" role="group" aria-label="前置条件">
-            {projects
-              .filter((p) => p.id !== projectId)
-              .map((p) => (
-                <Chip
-                  key={p.id}
-                  active={prerequisites.includes(p.id)}
-                  onClick={() =>
-                    setPrerequisites((cur) =>
-                      cur.includes(p.id) ? cur.filter((x) => x !== p.id) : [...cur, p.id],
-                    )
-                  }
-                >
-                  <span aria-hidden="true">{p.icon}</span> {p.name}
-                </Chip>
-              ))}
-          </div>
+        <Field label="前置条件（可选）" error={errors['prerequisites']} hint="这些项目当天完成，本项目的打卡才不算前置违规；可多选、可链式">
+          <MultiSelect
+            placeholder="选择前置项目"
+            options={linkOptions}
+            selected={prerequisites}
+            onToggle={togglePrereq}
+            emptyLabel="还没有其他项目"
+          />
         </Field>
+
+        {bad ? (
+          <p className="sheet-note">坏习惯没有完成事件，不能设置后置条件。</p>
+        ) : (
+          <Field label="后置条件（可选）" error={errors['postrequisites']} hint="本项目完成后，这些项目当天也要完成；没兑现会记连带违规，可多选">
+            <MultiSelect
+              placeholder="选择后置项目"
+              options={linkOptions}
+              selected={postrequisites}
+              onToggle={togglePost}
+              emptyLabel="还没有其他项目"
+            />
+          </Field>
+        )}
 
         {needsWeekdays ? (
           <Field label="选择星期" error={errors['weekdays']}>
@@ -347,10 +365,6 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
 
         <Field label="开始日期" htmlFor="p-start" error={errors['startDate']} hint="统计与连续记录从这一天算起">
           <Input id="p-start" type="date" value={startDate} max={today} min="2000-01-01" onChange={(event) => setStartDate(event.target.value)} />
-        </Field>
-
-        <Field label="每日提醒（可选）" htmlFor="p-reminder" error={errors['reminderTime']} hint="应用开着时到点提醒；可在「我的」里开启浏览器通知，切到后台也能收到">
-          <Input id="p-reminder" type="time" value={reminderTime} onChange={(event) => setReminderTime(event.target.value)} />
         </Field>
 
         {existing !== undefined ? (

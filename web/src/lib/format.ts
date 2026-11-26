@@ -99,15 +99,8 @@ export function scheduleName(schedule: ScheduleType): string {
  * avoidance ("每天 避免") because there is no quantity to reach. Mirrors the
  * server's schedule semantics.
  */
-export function scheduleLabel(p: Pick<Project, 'schedule' | 'target' | 'unit' | 'weekdays' | 'interval' | 'nature' | 'mode' | 'targetTime'>): string {
-  const goal =
-    p.nature === 'bad'
-      ? '避免'
-      : p.mode === 'time'
-        ? p.targetTime
-          ? `${p.targetTime} 前`
-          : '记录时间'
-        : `${formatValue(p.target)} ${p.unit}`.trim()
+export function scheduleLabel(p: Pick<Project, 'schedule' | 'target' | 'unit' | 'weekdays' | 'interval' | 'nature'>): string {
+  const goal = p.nature === 'bad' ? '避免' : `${formatValue(p.target)} ${p.unit}`.trim()
   switch (p.schedule) {
     case 'daily':
       return `每天 ${goal}`
@@ -158,13 +151,8 @@ function weekStartOf(day: string): string {
 /**
  * Progress text "5 / 8 杯"; interval projects show a count instead. A bad
  * habit shows the lapse count ("2 次") — there is no target to progress toward.
- * A time habit only says whether the time was recorded; its deadline already
- * appears in scheduleLabel, so repeating it here would be noise.
  */
-export function progressLabel(p: Pick<Project, 'schedule' | 'unit' | 'nature' | 'mode'>, value: number, target: number): string {
-  if (p.mode === 'time') {
-    return value > 0 ? '已记录' : '待记录'
-  }
+export function progressLabel(p: Pick<Project, 'schedule' | 'unit' | 'nature'>, value: number, target: number): string {
   if (p.nature === 'bad' || p.schedule === 'interval_hours' || target <= 0) {
     return `${formatValue(value)} 次`
   }

@@ -93,10 +93,14 @@ export type ProjectStatus = {
   lastCheckinAt?: string
   /** Prerequisite project ids not resolved today (gate still closed). */
   unmet: string[]
+  /** Postrequisites committed by a completion today, still unresolved. */
+  pendingPosts: string[]
+  /** Postrequisites left unresolved after the current period's completion day. */
+  brokenPosts: string[]
 }
 
 /** How completion is measured, orthogonal to the schedule (period layout). */
-export type ProjectMode = 'check' | 'value' | 'time'
+export type ProjectMode = 'check' | 'value'
 
 /**
  * Whether a project is a habit to build or a habit to break. Mirrors the
@@ -117,8 +121,7 @@ export type Project = {
   /** good = build the habit; bad = break it. Every project needs login to see. */
   nature: ProjectNature
   schedule: ScheduleType
-  /** check = one tick completes the period; value = accumulate to target;
-   * time = record a clock time (with an optional punctuality deadline). */
+  /** check = one tick completes the period; value = accumulate to target. */
   mode: ProjectMode
   target: number
   unit: string
@@ -126,16 +129,16 @@ export type Project = {
   weekdays: number[]
   /** Hours or days, per schedule. */
   interval: number
-  /** Punctuality deadline for time mode ("23:00"); "" = no deadline. */
-  targetTime: string
-  /** Optional daily reminder ("22:30"); "" = none. */
-  reminderTime: string
+  /** Optional heading for a check-in's free-text supplement. */
+  notePrompt: string
   startDate: string
   archived: boolean
   /** Floats the project to the top of Today; pinned projects leave their category group. */
   pinned: boolean
   /** Project ids that must be resolved the same day before this one unlocks. */
   prerequisites: string[]
+  /** Project ids this project commits to on a day it is completed. */
+  postrequisites: string[]
   createdAt: string
   updatedAt: string
   /** Revision counter; sent back as If-Match to detect lost updates. */
@@ -150,8 +153,6 @@ export type Checkin = {
   value: number
   note?: string
   mood?: string
-  /** Recorded wall-clock time for time mode ("23:40"); "" otherwise. */
-  time?: string
   /** A proof photo exists; fetch it from the photo URL, never inline. */
   hasPhoto: boolean
   /**
@@ -169,6 +170,10 @@ export type Checkin = {
   violated: boolean
   /** Derived: prerequisite project ids unmet on localDate. */
   unmet: string[]
+  /** Derived: postrequisites left unresolved after a closed completion day. */
+  postUnmet: string[]
+  /** Derived: postrequisites still open for today's completion. */
+  postPending: string[]
   createdAt: string
 }
 
@@ -205,13 +210,22 @@ export type Totals = {
   skipped: number
   completionRate: number
   onTimeRate: number
-  /** Records inside the interval or before the time-mode deadline. */
+  /** Records inside the interval. */
   onTimeCount: number
   lateCount: number
-  /** Time mode: mean recorded clock time, "HH:MM". */
-  avgTime: string
   backfilled: number
   violations: number
+  /** Closed-day postrequisite link-days: total commitments and broken ones. */
+  postReqs: number
+  postViolations: number
+  /** Fulfilled / closed postrequisite commitments, 0 when there are none. */
+  commitmentRate: number
+}
+
+/** One postrequisite link missed on one completion day. */
+export type BrokenCommitment = {
+  date: string
+  targetId: string
 }
 
 export type ProjectStats = {
@@ -222,6 +236,7 @@ export type ProjectStats = {
   periods: PeriodBar[]
   recent: Checkin[]
   skips: Skip[]
+  brokenCommitments: BrokenCommitment[]
 }
 
 export type Overview = {
@@ -234,6 +249,9 @@ export type Overview = {
     /** Bad-habit lapses, kept apart from the good-habit check-in totals. */
     slips: number
     monthSlips: number
+    /** Lifetime same-day postrequisite commitments and broken ones. */
+    postReqs: number
+    postViolations: number
   }
   /** Last 56 days, oldest first. count/value are good habits; slips are lapses. */
   activity: { date: string; count: number; value: number; slips: number }[]
@@ -257,11 +275,11 @@ export type ProjectInput = {
   unit?: string
   weekdays?: number[]
   interval?: number
-  targetTime?: string
-  reminderTime?: string
+  notePrompt?: string
   startDate: string
   pinned?: boolean
   prerequisites?: string[]
+  postrequisites?: string[]
 }
 
 /** A partial update; an omitted field means "leave it alone". */
@@ -279,21 +297,20 @@ export type ProjectPatch = {
   unit?: string
   weekdays?: number[]
   interval?: number
-  targetTime?: string
-  reminderTime?: string
+  notePrompt?: string
   startDate?: string
   archived?: boolean
   pinned?: boolean
   /** Replaces the whole prerequisite list; [] clears it. */
   prerequisites?: string[]
+  /** Replaces the whole postrequisite list; [] clears it. */
+  postrequisites?: string[]
 }
 
 export type CheckinInput = {
   value: number
   note?: string
   mood?: string
-  /** Recorded clock time for time mode ("23:40"); empty = now. */
-  time?: string
   /** Optional proof photo as a data URL; the server caps it at 400 KB. */
   photo?: string
   /** Empty = today; a past date is a backfill (补卡). */
@@ -322,6 +339,12 @@ export type ImportCounts = {
   projects: number
   checkins: number
   skips: number
+}
+
+/** The destructive database reset: the server wipes SQLite and re-seeds demo data if configured. */
+export type ResetResult = {
+  reset: boolean
+  seededProjects: number
 }
 
 export type ListProjectsParams = {

@@ -36,7 +36,8 @@ type TodayCounters struct {
 
 // OverviewTotals are the lifetime stat tiles. Checkins/MonthCheckins count
 // good-habit progress only; Slips/MonthSlips count bad-habit lapses, so a slip
-// never inflates the "total check-ins" achievement number.
+// never inflates the "total check-ins" achievement number. PostReqs and
+// PostViolations roll up same-day postrequisite commitments.
 type OverviewTotals struct {
 	Checkins       int `json:"checkins"`
 	ActiveProjects int `json:"activeProjects"`
@@ -44,6 +45,8 @@ type OverviewTotals struct {
 	MonthCheckins  int `json:"monthCheckins"`
 	Slips          int `json:"slips"`
 	MonthSlips     int `json:"monthSlips"`
+	PostReqs       int `json:"postReqs"`
+	PostViolations int `json:"postViolations"`
 }
 
 // DayActivity is one day of the cross-project activity heatmap. Count/Value
@@ -110,8 +113,12 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 	if err != nil {
 		return ProjectStats{}, err
 	}
+	links, err := s.db.loadProjectLinks(ctx, p, today)
+	if err != nil {
+		return ProjectStats{}, err
+	}
 	var checkins []Checkin
-	if p.Schedule == ScheduleIntervalHours || p.Mode == ModeTime {
+	if p.Schedule == ScheduleIntervalHours {
 		checkins, err = s.db.Checkins().AllAsc(ctx, p.ID)
 		if err != nil {
 			return ProjectStats{}, err
@@ -126,14 +133,11 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 		Aggregates: agg,
 		Skips:      skips,
 		Checkins:   checkins,
+		Posts:      links.posts,
 	})
 
 	// Derived prerequisite gate for today, plus backfill / violation counts.
-	unmetToday, err := s.db.UnmetByDay(ctx, p, []string{today})
-	if err != nil {
-		return ProjectStats{}, err
-	}
-	for _, id := range unmetToday[today] {
+	for _, id := range unmetPrereqsByDay(links.prereqs, []string{today})[today] {
 		out.Summary.Unmet = append(out.Summary.Unmet, id.String())
 	}
 	if err := s.db.sql.QueryRowContext(ctx,
@@ -141,11 +145,7 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 	).Scan(&out.Totals.Backfilled); err != nil {
 		return ProjectStats{}, fmt.Errorf("count backfilled: %w", err)
 	}
-	violations, err := s.db.countViolations(ctx, p, agg)
-	if err != nil {
-		return ProjectStats{}, err
-	}
-	out.Totals.Violations = violations
+	out.Totals.Violations = countPrereqViolations(links.prereqs, agg)
 
 	recent, err := s.db.Checkins().List(ctx, CheckinQuery{ProjectID: p.ID, Limit: 30})
 	if err != nil {
@@ -157,6 +157,20 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 		return ProjectStats{}, err
 	}
 	out.Skips = skipList
+	// The wire shape is always a list, never null: the UI reads .length and
+	// .includes without guards.
+	if out.Summary.Unmet == nil {
+		out.Summary.Unmet = []string{}
+	}
+	if out.Summary.PendingPosts == nil {
+		out.Summary.PendingPosts = []string{}
+	}
+	if out.Summary.BrokenPosts == nil {
+		out.Summary.BrokenPosts = []string{}
+	}
+	if out.BrokenCommitments == nil {
+		out.BrokenCommitments = []BrokenCommitment{}
+	}
 	return out, nil
 }
 
@@ -221,8 +235,10 @@ func (s *Stats) Overview(ctx context.Context, projects []Project, today string) 
 		}
 		out.Totals.BestStreak = max(out.Totals.BestStreak, stats.Summary.BestStreak)
 		out.Violations += stats.Totals.Violations
+		out.Totals.PostReqs += stats.Totals.PostReqs
+		out.Totals.PostViolations += stats.Totals.PostViolations
 		for _, c := range stats.Recent {
-			if c.Violated {
+			if c.Violated || len(c.PostUnmet) > 0 {
 				out.RecentViolations = append(out.RecentViolations, c)
 			}
 		}

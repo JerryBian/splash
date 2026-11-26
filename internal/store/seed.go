@@ -61,12 +61,13 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 		{in: ProjectInput{Name: "每周复盘", Description: "周日晚回顾本周，写三条收获。", Icon: "📝", Color: "orange", CategoryID: catIDs["学习"], Schedule: ScheduleWeekly, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 		{in: ProjectInput{Name: "记账", Description: "记录当天每一笔支出。", Icon: "💰", Color: "teal", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}, today: "pending"},
 		{in: ProjectInput{Name: "护肤", Description: "晚间护肤流程。", Icon: "🌙", Color: "pink", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
-		{in: ProjectInput{Name: "准时睡觉", Description: "记录每晚入睡时间，23:00 前算准时。", Icon: "😴", Color: "violet", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeTime, TargetTime: "23:00", ReminderTime: "22:30", StartDate: start}},
+		{in: ProjectInput{Name: "准时睡觉", Description: "记录每晚入睡时间，23:00 前算准时。", Icon: "😴", Color: "violet", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", NotePrompt: "什么时候睡的？睡了多久？", StartDate: start}},
 		{in: ProjectInput{Name: "熬夜", Description: "23 点后还没睡就记一次；坚持早睡才是目标。", Icon: "🦉", Color: "indigo", CategoryID: catIDs["生活"], Nature: NatureBad, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 		{in: ProjectInput{Name: "刷短视频", Description: "坏习惯：先读完书才允许刷；没读就刷会记一次前置违规。", Icon: "📱", Color: "orange", CategoryID: catIDs["生活"], Nature: NatureBad, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 	}
 
 	notes := []string{"状态不错", "有点累，但完成了", "顺便听了播客", "和朋友一起", "差点忘了", "补上昨天落下的"}
+	sleepNotes := []string{"22:40 入睡，睡了 7 小时", "23:10 才睡，6.5 小时", "22:20 上床，睡了 8 小时", "23:30 入睡，有点晚"}
 	moods := Moods
 
 	// Create the projects through the pool BEFORE opening the transaction:
@@ -81,18 +82,28 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 		created = append(created, p)
 	}
 
-	// Demo prerequisite: watching short videos is gated by reading first.
-	var readingID, videosID uuid.UUID
+	// Demo same-day links: watching short videos is gated by reading first,
+	// and a run day commits the evening to an on-time bedtime.
+	var readingID, videosID, runID, sleepID uuid.UUID
 	for _, p := range created {
 		switch p.Name {
 		case "阅读":
 			readingID = p.ID
 		case "刷短视频":
 			videosID = p.ID
+		case "晨跑":
+			runID = p.ID
+		case "准时睡觉":
+			sleepID = p.ID
 		}
 	}
 	if readingID != uuid.Nil() && videosID != uuid.Nil() {
-		if err := d.Projects().setPrereqs(ctx, videosID, []uuid.UUID{readingID}); err != nil {
+		if err := d.Projects().setLinks(ctx, videosID, []uuid.UUID{readingID}, nil); err != nil {
+			return 0, err
+		}
+	}
+	if runID != uuid.Nil() && sleepID != uuid.Nil() {
+		if err := d.Projects().setLinks(ctx, runID, nil, []uuid.UUID{sleepID}); err != nil {
 			return 0, err
 		}
 	}
@@ -103,22 +114,14 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	timeMode := map[uuid.UUID]bool{}
-	for _, p := range created {
-		timeMode[p.ID] = p.Mode == ModeTime
-	}
 	insertCheckin := func(pid uuid.UUID, date string, hour, minute int, value float64, note, mood string) error {
 		t, err := ParseDate(date)
 		if err != nil {
 			return err
 		}
 		now := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, 0, 0, cst).UTC()
-		clock := ""
-		if timeMode[pid] {
-			clock = fmt.Sprintf("%02d:%02d", hour, minute)
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			uuid.NewV7().String(), pid.String(), value, note, mood, clock, date, toMillis(now), 480, 0, toMillis(now), "")
+		_, err = tx.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			uuid.NewV7().String(), pid.String(), value, note, mood, date, toMillis(now), 480, 0, toMillis(now), "")
 		return err
 	}
 	insertSkip := func(pid uuid.UUID, date, reason string) error {
@@ -141,10 +144,9 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 				continue
 			}
 
-			// A time-mode habit logs one clock time per day (bedtime): mostly
-			// before the deadline, occasionally after, so punctuality analytics
-			// have something to show. Today stays unrecorded.
-			if p.Mode == ModeTime {
+			// The sleep demo shows the supplement prompt in action: a normal
+			// check habit whose records carry a free-text note.
+			if p.Name == "准时睡觉" {
 				if isToday || rng.Float64() > 0.85 {
 					continue
 				}
@@ -152,7 +154,7 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 				if rng.Float64() < 0.3 {
 					hour = 23
 				}
-				if err := insertCheckin(p.ID, date, hour, rng.Intn(60), 1, pick(rng, notes, 0.2), pick(rng, moods, 0.3)); err != nil {
+				if err := insertCheckin(p.ID, date, hour, rng.Intn(60), 1, pick(rng, sleepNotes, 0.85), pick(rng, moods, 0.3)); err != nil {
 					return 0, err
 				}
 				continue

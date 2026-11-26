@@ -19,6 +19,8 @@ export function makeStatus(overrides: Partial<ProjectStatus> = {}): ProjectStatu
     streak: 0,
     bestStreak: 0,
     unmet: [],
+    pendingPosts: [],
+    brokenPosts: [],
     ...overrides,
   }
 }
@@ -38,12 +40,12 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     unit: '次',
     weekdays: [],
     interval: 0,
-    targetTime: '',
-    reminderTime: '',
+    notePrompt: '',
     startDate: '2026-11-01',
     archived: false,
     pinned: false,
     prerequisites: [],
+    postrequisites: [],
     createdAt: '2026-11-01T00:00:00Z',
     updatedAt: '2026-11-01T00:00:00Z',
     version: 1,
@@ -55,8 +57,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
 export function makeOverview(overrides: Partial<Overview> = {}): Overview {
   return {
     today: { date: TEST_TODAY, total: 1, done: 0, pending: 1, skipped: 0, due: 0, slipped: 0 },
-    totals: { checkins: 0, activeProjects: 1, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 },
-    activity: Array.from({ length: 7 }, (_, i) => ({
+    totals: { checkins: 0, activeProjects: 1, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0, postReqs: 0, postViolations: 0 },    activity: Array.from({ length: 7 }, (_, i) => ({
       date: `2026-11-${15 + i}`,
       count: 0,
       value: 0,

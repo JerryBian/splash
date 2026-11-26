@@ -3,6 +3,7 @@ package store
 import (
 	"math"
 	"time"
+	"uuid"
 )
 
 // DateLayout is the canonical calendar-day format. Every date in the domain is
@@ -214,6 +215,12 @@ type Summary struct {
 	LastCheckinAt *time.Time `json:"lastCheckinAt,omitempty"` // interval_hours
 	// Unmet lists prerequisite project ids not resolved today (gate open?).
 	Unmet []string `json:"unmet"`
+	// PendingPosts lists postrequisites committed by a completion today that
+	// are still unresolved. They are not violations yet: the day is still open.
+	PendingPosts []string `json:"pendingPosts"`
+	// BrokenPosts lists postrequisites that were still unresolved after the
+	// current period's completion day closed.
+	BrokenPosts []string `json:"brokenPosts"`
 }
 
 // Totals is the lifetime roll-up shown on the detail page. For a bad project
@@ -228,12 +235,17 @@ type Totals struct {
 	Missed         int     `json:"missed"`
 	Skipped        int     `json:"skipped"`
 	CompletionRate float64 `json:"completionRate"` // done / (done + missed); the clean rate for bad habits
-	OnTimeRate     float64 `json:"onTimeRate"`     // interval_hours and time mode
-	OnTimeCount    int     `json:"onTimeCount"`    // records inside the interval/deadline
-	LateCount      int     `json:"lateCount"`      // interval_hours and time mode
-	AvgTime        string  `json:"avgTime"`        // time mode: mean recorded clock time, "HH:MM"
+	OnTimeRate     float64 `json:"onTimeRate"`     // interval_hours
+	OnTimeCount    int     `json:"onTimeCount"`    // records inside the interval
+	LateCount      int     `json:"lateCount"`      // interval_hours
 	Backfilled     int     `json:"backfilled"`     // check-ins recorded after their credited day
 	Violations     int     `json:"violations"`     // check-ins landed while a prerequisite was unmet
+	// PostReqs and PostViolations count postrequisite link-days on closed days:
+	// every (completion day, target) pair is one commitment, and a violation is
+	// one pair left unresolved after that day. CommitmentRate is the share kept.
+	PostReqs       int     `json:"postReqs"`
+	PostViolations int     `json:"postViolations"`
+	CommitmentRate float64 `json:"commitmentRate"`
 }
 
 // HeatCell is one day of the calendar heatmap.
@@ -264,11 +276,28 @@ type ProjectStats struct {
 	Periods []PeriodBar `json:"periods"`
 	Recent  []Checkin   `json:"recent"`
 	Skips   []Skip      `json:"skips"`
+	// BrokenCommitments lists postrequisite links whose completion day closed
+	// without the target being resolved. Derived, never stored.
+	BrokenCommitments []BrokenCommitment `json:"brokenCommitments"`
+}
+
+// BrokenCommitment is one postrequisite link missed on one completion day.
+type BrokenCommitment struct {
+	Date     string    `json:"date"`
+	TargetID uuid.UUID `json:"targetId"`
+}
+
+// LinkTarget is one end of a same-day link plus the snapshots needed to decide
+// whether it was resolved on a day. Verdicts are pure input to BuildStats.
+type LinkTarget struct {
+	Project Project
+	Agg     map[string]DayAggregate
+	Skips   map[string]string
 }
 
 // StatsInput carries everything BuildStats needs. Aggregates and Skips cover
 // the project's whole life; Checkins (ascending by CheckedAt) is only required
-// for interval_hours streaks and for time-mode punctuality.
+// for interval_hours streaks.
 type StatsInput struct {
 	Project    Project
 	Today      string
@@ -277,6 +306,9 @@ type StatsInput struct {
 	Aggregates map[string]DayAggregate
 	Skips      map[string]string
 	Checkins   []Checkin
+	// Posts are the source project's postrequisite targets with their day
+	// snapshots. Empty means the project made no follow-up commitments.
+	Posts []LinkTarget
 }
 
 // BuildStats computes summary, totals, heatmap and trend bars. It is pure: no
@@ -329,12 +361,6 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 			out.Totals.ActiveDays++
 		}
 	}
-	// Punctuality is a lifetime roll-up like the totals above and exists only
-	// for time mode. It is derived from the loaded history, never stored.
-	if p.Mode == ModeTime {
-		out.Totals.OnTimeRate, out.Totals.OnTimeCount, out.Totals.LateCount, out.Totals.AvgTime =
-			timeAnalytics(in.Checkins, p.TargetTime)
-	}
 
 	// Forward walk over every period from start to today. One pass yields the
 	// current streak, the best streak and the done/missed/skipped counts:
@@ -355,6 +381,19 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 		// week/month with a skip inside is only excused once it ends, because
 		// it can still be completed.
 		excusedNow := excused && (ended || (per.Start == per.End && per.End == in.Today))
+		if p.Nature != NatureBad && len(in.Posts) > 0 {
+			// A completed period commits its postrequisites on the day the
+			// target was reached. Closed days accrue lifetime totals; today is
+			// still pending and is reported on the summary instead.
+			if day := periodCompletionDay(p, per, in.Today, in.Aggregates); day != "" && day < in.Today {
+				unmet := unresolvedPostTargets(in.Posts, day)
+				out.Totals.PostReqs += len(in.Posts)
+				out.Totals.PostViolations += len(unmet)
+				for _, target := range unmet {
+					out.BrokenCommitments = append(out.BrokenCommitments, BrokenCommitment{Date: day, TargetID: target})
+				}
+			}
+		}
 		if p.Nature == NatureBad {
 			// Inverted: a lapse spoils the period outright (even while open),
 			// and only a fully survived, unexcused period extends the run. The
@@ -386,6 +425,7 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 		per = NextPeriod(p, per)
 	}
 	out.Totals.CompletionRate = rate(out.Totals.Done, out.Totals.Done+out.Totals.Missed)
+	out.Totals.CommitmentRate = rate(out.Totals.PostReqs-out.Totals.PostViolations, out.Totals.PostReqs)
 
 	// Summary for the current period.
 	value, count := periodValue(in, current)
@@ -433,6 +473,17 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 		Streak:      run,
 		BestStreak:  best,
 	}
+	if p.Nature != NatureBad && len(in.Posts) > 0 {
+		if day := periodCompletionDay(p, current, in.Today, in.Aggregates); day != "" {
+			unmet := unresolvedPostTargets(in.Posts, day)
+			switch {
+			case day == in.Today:
+				out.Summary.PendingPosts = linkIDs(unmet)
+			case day < in.Today:
+				out.Summary.BrokenPosts = linkIDs(unmet)
+			}
+		}
+	}
 
 	if in.Weeks > 0 {
 		out.Heatmap = buildHeatmap(in)
@@ -441,63 +492,47 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 	return out
 }
 
-// timeAnalytics derives punctuality for a time-mode habit: the share of records
-// at or before the deadline, how many were on time, how many late, and the mean
-// recorded clock time. With no deadline there is nothing to be late against, so
-// rate/onTime/late stay zero and only the average is meaningful.
-//
-// LateForDeadline compares on a 24h circle, so an "asleep by 00:30" habit logged
-// at 23:40 is early rather than eleven hours late.
-func timeAnalytics(checkins []Checkin, target string) (rate float64, onTime, late int, avg string) {
-	hasDeadline := ClockMinutes(target) >= 0
-	minutes := make([]int, 0, len(checkins))
-	for _, c := range checkins {
-		m := ClockMinutes(c.Time)
-		if m < 0 {
-			continue
-		}
-		minutes = append(minutes, m)
-		if hasDeadline {
-			if LateForDeadline(target, c.Time) {
-				late++
-			} else {
-				onTime++
-			}
+// periodCompletionDay returns the first day inside per on which p's target was
+// reached, or "" when it was not reached by today. Postrequisites trigger on
+// this day only: a weekly goal of three does not demand its follow-up on every
+// later day of the same week. Bad habits have no completion event.
+func periodCompletionDay(p Project, per Period, today string, agg map[string]DayAggregate) string {
+	if p.Nature == NatureBad || p.Target <= 0 {
+		return ""
+	}
+	from := maxDate(per.Start, p.StartDate)
+	to := minDate(per.End, today)
+	var value float64
+	for d := from; d <= to; d = AddDays(d, 1) {
+		value += agg[d].Value
+		if value >= p.Target {
+			return d
 		}
 	}
-	if len(minutes) == 0 {
-		return 0, 0, 0, ""
-	}
-	avg = circularMeanClock(minutes)
-	if hasDeadline {
-		rate = float64(onTime) / float64(len(minutes))
-	}
-	return rate, onTime, late, avg
+	return ""
 }
 
-// circularMeanClock averages clock times on the 24-hour circle, not as plain
-// numbers: bedtimes of 23:50 and 00:10 average to 00:00, which is the useful
-// answer, while an arithmetic mean would claim 12:00. Samples spread evenly
-// around the circle have no meaningful mean, so it reports "".
-func circularMeanClock(minutes []int) string {
-	if len(minutes) == 0 {
-		return ""
+// unresolvedPostTargets reports which postrequisite targets were not resolved
+// on day. Resolution reuses the prerequisite rule: archived, skipped and
+// not-scheduled targets are resolved; a good target needs its period target,
+// a bad target needs a clean day.
+func unresolvedPostTargets(posts []LinkTarget, day string) []uuid.UUID {
+	unmet := []uuid.UUID{}
+	for _, target := range posts {
+		if !PrereqSatisfied(target.Project, day, target.Agg, target.Skips) {
+			unmet = append(unmet, target.Project.ID)
+		}
 	}
-	var sin, cos float64
-	for _, m := range minutes {
-		angle := 2 * math.Pi * float64(m) / (24 * 60)
-		sin += math.Sin(angle)
-		cos += math.Cos(angle)
+	return unmet
+}
+
+// linkIDs renders resolved link targets for the Summary's wire shape.
+func linkIDs(ids []uuid.UUID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
 	}
-	n := float64(len(minutes))
-	if math.Hypot(sin, cos)/n < 1e-6 {
-		return ""
-	}
-	angle := math.Atan2(sin, cos)
-	if angle < 0 {
-		angle += 2 * math.Pi
-	}
-	return MinutesClock(int(math.Round(angle / (2 * math.Pi) * (24 * 60))))
+	return out
 }
 
 func buildIntervalStats(in StatsInput) ProjectStats {
@@ -548,6 +583,7 @@ func buildIntervalStats(in StatsInput) ProjectStats {
 	if doneTarget < 1 {
 		doneTarget = 1
 	}
+	var pendingPosts []string
 	for d := p.StartDate; d <= in.Today; d = AddDays(d, 1) {
 		if d > in.Today {
 			break
@@ -557,6 +593,21 @@ func buildIntervalStats(in StatsInput) ProjectStats {
 			continue
 		}
 		agg := in.Aggregates[d]
+		if p.Nature != NatureBad && len(in.Posts) > 0 && agg.Count > 0 {
+			// Interval check-ins are events, not periods: every day with a
+			// check-in commits its postrequisites on that same day.
+			unmet := unresolvedPostTargets(in.Posts, d)
+			switch {
+			case d < in.Today:
+				out.Totals.PostReqs += len(in.Posts)
+				out.Totals.PostViolations += len(unmet)
+				for _, target := range unmet {
+					out.BrokenCommitments = append(out.BrokenCommitments, BrokenCommitment{Date: d, TargetID: target})
+				}
+			case d == in.Today:
+				pendingPosts = linkIDs(unmet)
+			}
+		}
 		switch {
 		case agg.Count >= doneTarget:
 			out.Totals.Done++
@@ -567,6 +618,7 @@ func buildIntervalStats(in StatsInput) ProjectStats {
 		}
 	}
 	out.Totals.CompletionRate = rate(out.Totals.Done, out.Totals.Done+out.Totals.Missed)
+	out.Totals.CommitmentRate = rate(out.Totals.PostReqs-out.Totals.PostViolations, out.Totals.PostReqs)
 
 	var dueAt time.Time
 	var lastAt *time.Time
@@ -594,6 +646,7 @@ func buildIntervalStats(in StatsInput) ProjectStats {
 		BestStreak:    best,
 		DueAt:         &dueAt,
 		LastCheckinAt: lastAt,
+		PendingPosts:  pendingPosts,
 	}
 
 	if in.Weeks > 0 {

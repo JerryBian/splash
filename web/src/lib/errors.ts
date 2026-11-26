@@ -68,6 +68,7 @@ function translatedFieldSummary(error: ApiError): string {
  */
 export function translateFieldMessage(message: string): string {
   if (message === 'is required') return '必填'
+  if (message === 'is incorrect') return '不正确'
   if (message === 'does not exist') return '不存在'
   if (message === 'must set at least one field') return '至少修改一个字段'
   if (message === 'must list at least one day') return '至少选择一天'

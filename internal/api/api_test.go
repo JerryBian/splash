@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -63,13 +64,16 @@ func newTestAPI(t *testing.T, maxBody int64) testAPI {
 
 	mux := http.NewServeMux()
 	New(Deps{
-		Categories:          db.Categories(),
-		Projects:            db.Projects(),
-		Checkins:            db.Checkins(),
-		Skips:               db.Skips(),
-		Stats:               db.Stats(),
-		Export:              db,
-		Import:              db,
+		Categories: db.Categories(),
+		Projects:   db.Projects(),
+		Checkins:   db.Checkins(),
+		Skips:      db.Skips(),
+		Stats:      db.Stats(),
+		Export:     db,
+		Import:     db,
+		Reset: func(ctx context.Context) (int, error) {
+			return db.Reset(ctx, false)
+		},
 		Auth:                authn,
 		LoginLimiter:        auth.NewLimiter(5, 15*time.Minute, clock.Now),
 		Log:                 slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1067,5 +1071,215 @@ func TestPinnedProjectRoundTrip(t *testing.T) {
 	decode(t, raw, &listed)
 	if len(listed.Projects) != 1 || !listed.Projects[0].Pinned {
 		t.Errorf("list does not carry the pin: %+v", listed.Projects)
+	}
+}
+
+func TestPostrequisiteFlow(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	run := api.createProject(t, cookie, validProjectRequest("Run"))
+	sleep := api.createProject(t, cookie, validProjectRequest("Sleep"))
+
+	resp, raw := api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+run.ID,
+		projectPatchRequest{Postrequisites: &[]string{sleep.ID}}, cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("wire postrequisite: %d %s", resp.StatusCode, raw)
+	}
+	var patched project
+	decode(t, raw, &patched)
+	if len(patched.Postrequisites) != 1 || patched.Postrequisites[0] != sleep.ID {
+		t.Fatalf("project postrequisites = %v", patched.Postrequisites)
+	}
+
+	yesterday := "2026-11-20"
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/projects/"+run.ID+"/checkins",
+		checkinRequest{Value: 1, Date: yesterday}, cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("run checkin: %d %s", resp.StatusCode, raw)
+	}
+
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+run.ID+"/stats", nil, cookie)
+	var stats statsResponse
+	decode(t, raw, &stats)
+	if stats.Totals.PostReqs != 1 || stats.Totals.PostViolations != 1 || stats.Totals.CommitmentRate != 0 {
+		t.Errorf("post totals = %+v", stats.Totals)
+	}
+	if len(stats.BrokenCommitments) != 1 || stats.BrokenCommitments[0].Date != yesterday || stats.BrokenCommitments[0].TargetID.String() != sleep.ID {
+		t.Errorf("broken commitments = %+v", stats.BrokenCommitments)
+	}
+	if !strings.Contains(string(raw), `"targetId":"`+sleep.ID+`"`) {
+		t.Errorf("broken commitment targetId is not a JSON string: %s", raw)
+	}
+	if len(stats.Recent) != 1 || len(stats.Recent[0].PostUnmet) != 1 || stats.Recent[0].PostUnmet[0] != sleep.ID {
+		t.Errorf("recent post verdicts = %+v", stats.Recent)
+	}
+
+	// The overview surfaces the same broken commitment as a recent violation.
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/stats/overview", nil, cookie)
+	var overview store.OverviewStats
+	decode(t, raw, &overview)
+	if overview.Totals.PostReqs != 1 || overview.Totals.PostViolations != 1 {
+		t.Errorf("overview post totals = %+v", overview.Totals)
+	}
+	if len(overview.RecentViolations) != 1 || len(overview.RecentViolations[0].PostUnmet) != 1 {
+		t.Errorf("overview recent violations = %+v", overview.RecentViolations)
+	}
+
+	// Sleeping on the same day clears it.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/projects/"+sleep.ID+"/checkins",
+		checkinRequest{Value: 1, Date: yesterday}, cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("sleep checkin: %d %s", resp.StatusCode, raw)
+	}
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects/"+run.ID+"/stats", nil, cookie)
+	decode(t, raw, &stats)
+	if stats.Totals.PostViolations != 0 || len(stats.BrokenCommitments) != 0 {
+		t.Errorf("after backfill: totals %+v broken %+v", stats.Totals, stats.BrokenCommitments)
+	}
+	if stats.Summary.PendingPosts == nil || stats.Summary.BrokenPosts == nil || stats.BrokenCommitments == nil {
+		t.Errorf("wire arrays must be [] not null: %s", raw)
+	}
+}
+
+func TestLinkValidationOverHTTP(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	a := api.createProject(t, cookie, validProjectRequest("A"))
+	b := api.createProject(t, cookie, validProjectRequest("B"))
+	bad := api.createProject(t, cookie, projectRequest{
+		Name: "Bad", Icon: "🦉", Color: "indigo", Nature: "bad", Schedule: "daily",
+		Target: 1, Unit: "times", StartDate: "2026-11-01",
+	})
+
+	// Postrequisites on a bad habit are rejected.
+	resp, raw := api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+bad.ID,
+		projectPatchRequest{Postrequisites: &[]string{a.ID}}, cookie)
+	if code, _ := decodeError(t, raw); resp.StatusCode != http.StatusUnprocessableEntity || code != "validation_failed" {
+		t.Errorf("bad postrequisite: %d %s", resp.StatusCode, code)
+	}
+
+	// The same target cannot be both directions.
+	resp, raw = api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+a.ID,
+		projectPatchRequest{Prerequisites: &[]string{b.ID}, Postrequisites: &[]string{b.ID}}, cookie)
+	if code, _ := decodeError(t, raw); resp.StatusCode != http.StatusUnprocessableEntity || code != "validation_failed" {
+		t.Errorf("overlap: %d %s", resp.StatusCode, code)
+	}
+
+	// Cross-direction cycles are rejected.
+	if resp, raw := api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+a.ID,
+		projectPatchRequest{Postrequisites: &[]string{b.ID}}, cookie); resp.StatusCode != http.StatusOK {
+		t.Fatalf("a implies b: %d %s", resp.StatusCode, raw)
+	}
+	resp, raw = api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+b.ID,
+		projectPatchRequest{Prerequisites: &[]string{a.ID}}, cookie)
+	if code, details := decodeError(t, raw); resp.StatusCode != http.StatusUnprocessableEntity || code != "validation_failed" || len(details) == 0 {
+		t.Errorf("cycle: %d %s %v", resp.StatusCode, code, details)
+	}
+}
+
+func TestNotePromptOverHTTP(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	req := validProjectRequest("Sleep")
+	req.NotePrompt = "什么时候睡的？睡了多久？"
+	p := api.createProject(t, cookie, req)
+	if p.NotePrompt != req.NotePrompt {
+		t.Errorf("created notePrompt = %q", p.NotePrompt)
+	}
+	next := "睡了多久？"
+	resp, raw := api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+p.ID,
+		projectPatchRequest{NotePrompt: &next}, cookie, "If-Match", `"v1"`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("patch notePrompt: %d %s", resp.StatusCode, raw)
+	}
+	var patched project
+	decode(t, raw, &patched)
+	if patched.NotePrompt != next {
+		t.Errorf("patched notePrompt = %q", patched.NotePrompt)
+	}
+
+	// The supplement is the ordinary note field on the record.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins",
+		checkinRequest{Value: 1, Note: "22:40 入睡，睡了 7 小时"}, cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("checkin: %d %s", resp.StatusCode, raw)
+	}
+	var c checkin
+	decode(t, raw, &c)
+	if c.Note != "22:40 入睡，睡了 7 小时" {
+		t.Errorf("checkin note = %q", c.Note)
+	}
+}
+
+func TestResetRequiresPasswordAndWipesData(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	p := api.createProject(t, cookie, validProjectRequest("KeepMe"))
+	resp, raw := api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins",
+		checkinRequest{Value: 1, Note: "before reset"}, cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("seed checkin: %d %s", resp.StatusCode, raw)
+	}
+
+	// A wrong password is rejected without touching the database.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/admin/reset",
+		resetRequest{Password: "wrong"}, cookie)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("wrong password status = %d, body %s", resp.StatusCode, raw)
+	}
+	code, details := decodeError(t, raw)
+	if code != httpx.CodeValidationFailed || len(details) != 1 ||
+		details[0].Field != "password" || details[0].Message != "is incorrect" {
+		t.Errorf("wrong password error = %s %+v", code, details)
+	}
+	resp, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects", nil, cookie)
+	var before struct {
+		Projects []project `json:"projects"`
+	}
+	decode(t, raw, &before)
+	if resp.StatusCode != http.StatusOK || len(before.Projects) != 1 {
+		t.Fatalf("projects before reset = %d, status %d", len(before.Projects), resp.StatusCode)
+	}
+
+	// An empty confirmation is its own field error.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/admin/reset", resetRequest{}, cookie)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("empty password status = %d, body %s", resp.StatusCode, raw)
+	}
+	_, details = decodeError(t, raw)
+	if len(details) != 1 || details[0].Message != "is required" {
+		t.Errorf("empty password details = %+v", details)
+	}
+
+	// The correct password deletes and recreates the store.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/admin/reset",
+		resetRequest{Password: "splash123"}, cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reset status = %d, body %s", resp.StatusCode, raw)
+	}
+	var result resetResponse
+	decode(t, raw, &result)
+	if !result.Reset || result.SeededProjects != 0 {
+		t.Errorf("reset response = %+v", result)
+	}
+
+	resp, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects", nil, cookie)
+	var after struct {
+		Projects []project `json:"projects"`
+	}
+	decode(t, raw, &after)
+	if resp.StatusCode != http.StatusOK || len(after.Projects) != 0 {
+		t.Fatalf("projects after reset = %d, status %d, body %s", len(after.Projects), resp.StatusCode, raw)
+	}
+	resp, raw = api.do(t, http.MethodGet, "/api/v1/health/ready", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readiness after reset = %d, body %s", resp.StatusCode, raw)
+	}
+	// The session survives (it is signed by config, not stored in SQLite), and
+	// the fresh database accepts writes.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/projects",
+		validProjectRequest("AfterReset"), cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create after reset = %d, body %s", resp.StatusCode, raw)
 	}
 }

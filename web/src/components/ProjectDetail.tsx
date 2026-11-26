@@ -8,7 +8,7 @@ import { fetchDay, invalidate } from '../lib/async'
 import { addDays, formatClock, formatDayCN, formatMonthShort, parseDay } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatPercent, formatValue, periodLabel, progressLabel, scheduleLabel } from '../lib/format'
-import { dailyEquivalentTarget, isBad, isLate, isTime, statusLabel } from '../lib/schedule'
+import { dailyEquivalentTarget, isBad, postState, statusLabel, type PostState } from '../lib/schedule'
 import { Achievements } from './Achievements'
 import { CheckinSheet } from './CheckinSheet'
 import { Heatmap, TrendBars } from './charts'
@@ -20,7 +20,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
   FlameIcon,
-  LockIcon,
+  LinkIcon,
   PencilIcon,
   PinIcon,
   PlusIcon,
@@ -32,6 +32,14 @@ import {
 import { ConfirmDialog } from './overlays'
 import { PhotoThumb } from './PhotoThumb'
 import { Button, EmptyState, IconButton, NatureBadge, RecordBadges, StatTile } from './ui'
+
+/** Words for one postrequisite's state in the current period. */
+const POST_STATE_LABEL: Record<PostState, string> = {
+  pending: '今日待兑现',
+  broken: '本周期未兑现',
+  resolved: '已兑现',
+  waiting: '完成后生效',
+}
 
 /**
  * The project page: identity, the four numbers that matter, the stamp
@@ -101,7 +109,7 @@ function DetailBody({ projectId }: { projectId: string }) {
   const summary = stats.summary
   const isInterval = project.schedule === 'interval_hours'
   const bad = isBad(project)
-  const timeMode = isTime(project)
+  const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? id
 
   const toggleArchive = async () => {
     setBusy(true)
@@ -189,7 +197,7 @@ function DetailBody({ projectId }: { projectId: string }) {
         </div>
         {!isInterval ? (
           <div className="detail-progress">
-            {bad || timeMode ? null : (
+            {bad ? null : (
               <span className="bar bar-big">
                 <span className="bar-fill" style={barStyle} />
               </span>
@@ -202,6 +210,9 @@ function DetailBody({ projectId }: { projectId: string }) {
             {summary.lastCheckinAt !== undefined ? ` · 上次 ${formatClock(summary.lastCheckinAt)}` : ''}
           </p>
         )}
+        {project.notePrompt !== '' ? (
+          <p className="sheet-note link-hint">打卡时可补充：{project.notePrompt}</p>
+        ) : null}
         <Button onClick={() => setSheetDate(today)}>
           <PlusIcon size={15} /> {bad ? '记录 / 补卡' : '打卡 / 补卡'}
         </Button>
@@ -211,6 +222,7 @@ function DetailBody({ projectId }: { projectId: string }) {
         project={project}
         today={today}
         version={version}
+        nameOf={nameOf}
         onBackfill={(day) => setSheetDate(day)}
         onChanged={afterMutation}
       />
@@ -241,65 +253,108 @@ function DetailBody({ projectId }: { projectId: string }) {
         <StatTile label={bad ? '当前坚持' : '当前连续'} value={summary.streak} icon={<FlameIcon size={14} />} sub="个周期" />
         <StatTile label={bad ? '最佳坚持' : '最佳连续'} value={summary.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
         <StatTile
-          label={isInterval ? '按时率' : timeMode ? '准时率' : bad ? '守住率' : '完成率'}
-          value={
-            timeMode && project.targetTime === ''
-              ? '—'
-              : formatPercent(isInterval || timeMode ? stats.totals.onTimeRate : stats.totals.completionRate)
-          }
+          label={isInterval ? '按时率' : bad ? '守住率' : '完成率'}
+          value={formatPercent(isInterval ? stats.totals.onTimeRate : stats.totals.completionRate)}
           icon={<TargetIcon size={14} />}
           sub={
             isInterval
               ? `${stats.totals.lateCount} 次超时`
-              : timeMode
-                ? project.targetTime
-                  ? `${stats.totals.onTimeCount} 准时 / ${stats.totals.lateCount} 迟到`
-                  : '未设准时目标'
-                : bad
-                  ? `${stats.totals.done} 守住 / ${stats.totals.missed} 破戒`
-                  : `${stats.totals.done} 完成 / ${stats.totals.missed} 缺失`
+              : bad
+                ? `${stats.totals.done} 守住 / ${stats.totals.missed} 破戒`
+                : `${stats.totals.done} 完成 / ${stats.totals.missed} 缺失`
           }
         />
-        {timeMode ? (
-          <StatTile
-            label="平均时间"
-            value={stats.totals.avgTime || '—'}
-            icon={<ClockIcon size={14} />}
-            sub={`${stats.totals.checkins} 次记录 · ${stats.totals.backfilled} 补卡`}
-          />
-        ) : (
-          <StatTile
-            label={bad ? '破戒次数' : '总打卡'}
-            value={stats.totals.checkins}
-            icon={<CheckIcon size={14} />}
-            sub={bad ? `${stats.totals.activeDays} 个破戒日 · ${stats.totals.backfilled} 补卡` : `${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
-          />
-        )}
+        <StatTile
+          label={bad ? '破戒次数' : '总打卡'}
+          value={stats.totals.checkins}
+          icon={<CheckIcon size={14} />}
+          sub={bad ? `${stats.totals.activeDays} 个破戒日 · ${stats.totals.backfilled} 补卡` : `${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
+        />
       </section>
 
       <Achievements project={project} totals={stats.totals} summary={summary} />
 
-      {project.prerequisites.length > 0 ? (
-        <section className="detail-section panel chart-panel" aria-label="前置条件">
+      {project.prerequisites.length > 0 || project.postrequisites.length > 0 ? (
+        <section className="detail-section panel chart-panel" aria-label="关联项目">
           <h2 className="section-head">
-            <LockIcon size={15} /> 前置条件
-            <span className="section-hint">同日全部满足才解锁</span>
+            <LinkIcon size={15} /> 关联项目
+            <span className="section-hint">同日完成；补卡可消除违规</span>
           </h2>
-          <ul className="prereq-list">
-            {project.prerequisites.map((id) => {
-              const prereq = projects.find((p) => p.id === id)
-              const unmet = summary.unmet.includes(id)
-              return (
-                <li key={id} data-unmet={unmet ? 'true' : undefined}>
-                  <span className="prereq-name">
-                    <span aria-hidden="true">{prereq?.icon ?? '❓'}</span> {prereq?.name ?? id}
-                  </span>
-                  <span className="prereq-state">{unmet ? '今日未满足' : '今日已满足'}</span>
-                </li>
-              )
-            })}
+          {project.prerequisites.length > 0 ? (
+            <>
+              <h3 className="sheet-subhead">前置 · 这些完成了我才算数</h3>
+              <ul className="prereq-list">
+                {project.prerequisites.map((id) => {
+                  const prereq = projects.find((p) => p.id === id)
+                  const unmet = summary.unmet.includes(id)
+                  return (
+                    <li key={id} data-unmet={unmet ? 'true' : undefined}>
+                      <span className="prereq-name">
+                        <span aria-hidden="true">{prereq?.icon ?? '❓'}</span> {prereq?.name ?? id}
+                      </span>
+                      <span className="prereq-state">{unmet ? '今日未满足' : '今日已满足'}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          ) : null}
+          {project.postrequisites.length > 0 ? (
+            <>
+              <h3 className="sheet-subhead sheet-subhead-gap">后置 · 我完成后这些也要完成</h3>
+              <ul className="prereq-list">
+                {project.postrequisites.map((id) => {
+                  const target = projects.find((p) => p.id === id)
+                  const state = postState(project, summary, id)
+                  return (
+                    <li key={id} data-post={state}>
+                      <span className="prereq-name">
+                        <span aria-hidden="true">{target?.icon ?? '❓'}</span> {target?.name ?? id}
+                      </span>
+                      <span className="prereq-state">{POST_STATE_LABEL[state]}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </>
+          ) : null}
+          {stats.totals.postReqs > 0 ? (
+            <p className="link-rate">
+              连带兑现 {stats.totals.postReqs - stats.totals.postViolations}/{stats.totals.postReqs}
+              {` · ${formatPercent(stats.totals.commitmentRate)}`}
+            </p>
+          ) : null}
+          <p className="sheet-note">
+            前置未完成时打卡会记一次前置违规；后置未兑现会记一次连带违规。两者都以当天为准，补卡可自动消除。
+          </p>
+        </section>
+      ) : null}
+
+      {stats.brokenCommitments.length > 0 ? (
+        <section className="detail-section panel chart-panel" aria-label="连带未兑现">
+          <h2 className="section-head">
+            <AlertIcon size={15} /> 连带未兑现
+            <span className="section-hint">{stats.brokenCommitments.length} 条</span>
+          </h2>
+          <ul className="record-list">
+            {[...stats.brokenCommitments]
+              .toReversed()
+              .slice(0, 12)
+              .map((broken) => {
+                const target = projects.find((p) => p.id === broken.targetId)
+                return (
+                  <li key={`${broken.date}:${broken.targetId}`} className="record">
+                    <span className="record-value">{formatDayCN(broken.date)}</span>
+                    <span className="record-meta">未兑现：{target?.name ?? broken.targetId}</span>
+                    <span className="rec-badge" data-kind="post">未兑现</span>
+                  </li>
+                )
+              })}
           </ul>
-          <p className="sheet-note">未满足前置时打卡会记一次违规；事后补卡前置可自动消除。</p>
+          {stats.brokenCommitments.length > 12 ? (
+            <p className="sheet-note">仅显示最近 12 条，共 {stats.brokenCommitments.length} 条。</p>
+          ) : null}
+          <p className="sheet-note">把后置项目补卡到对应日期，这条记录会自动消失。</p>
         </section>
       ) : null}
 
@@ -326,7 +381,7 @@ function DetailBody({ projectId }: { projectId: string }) {
         </section>
       ) : null}
 
-      <HistoryList key={version} project={project} initial={stats.recent} onRemove={removeRecent} />
+      <HistoryList key={version} project={project} initial={stats.recent} onRemove={removeRecent} nameOf={nameOf} />
 
       <footer className="detail-actions">
         <Button variant="soft" onClick={() => navigate(`#edit/${project.id}`)}>
@@ -391,12 +446,14 @@ function HistoryCalendar({
   project,
   today,
   version,
+  nameOf,
   onBackfill,
   onChanged,
 }: {
   project: Project
   today: string
   version: number
+  nameOf: (id: string) => string
   onBackfill: (day: string) => void
   onChanged: () => Promise<void>
 }) {
@@ -434,6 +491,7 @@ function HistoryCalendar({
           today={today}
           year={year}
           version={version}
+          nameOf={nameOf}
           selectedDay={selectedDay}
           onSelect={(day) => setSelectedDay((cur) => (cur === day ? null : day))}
           onBackfill={onBackfill}
@@ -449,6 +507,7 @@ function CalendarBody({
   today,
   year,
   version,
+  nameOf,
   selectedDay,
   onSelect,
   onBackfill,
@@ -458,6 +517,7 @@ function CalendarBody({
   today: string
   year: number
   version: number
+  nameOf: (id: string) => string
   selectedDay: string | null
   onSelect: (day: string) => void
   onBackfill: (day: string) => void
@@ -490,6 +550,7 @@ function CalendarBody({
             project={project}
             day={selectedDay}
             version={version}
+            nameOf={nameOf}
             verdictLabel={statusLabel(cells.find((c) => c.date === selectedDay)?.status ?? 'none', project.nature)}
             onBackfill={() => onBackfill(selectedDay)}
             onChanged={onChanged}
@@ -510,10 +571,12 @@ function HistoryList({
   project,
   initial,
   onRemove,
+  nameOf,
 }: {
   project: Project
   initial: Checkin[]
   onRemove: (id: string) => Promise<void>
+  nameOf: (id: string) => string
 }) {
   const [records, setRecords] = useState<Checkin[]>(initial)
   const [cursor, setCursor] = useState<string | null>(
@@ -560,19 +623,22 @@ function HistoryList({
             {shown.map((record) => (
               <li key={record.id} className="record">
                 <span className="record-value">
-                  {isTime(project)
-                    ? record.time !== undefined && record.time !== ''
-                      ? record.time
-                      : formatClock(record.checkedAt)
-                    : `${formatValue(record.value)} ${project.unit}`}
+                  {formatValue(record.value)} {project.unit}
                 </span>
                 <span className="record-meta">
-                  {formatDayCN(record.localDate)}
-                  {isTime(project) ? '' : ` ${formatClock(record.checkedAt)}`}
+                  {formatDayCN(record.localDate)} {formatClock(record.checkedAt)}
                   {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                   {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
                 </span>
-                {isLate(project, record) ? <span className="rec-badge" data-kind="late">迟到</span> : null}
+                {record.postUnmet.length > 0 ? (
+                  <span className="rec-badge" data-kind="post" title={`未兑现：${record.postUnmet.map(nameOf).join('、')}`}>
+                    未兑现</span>
+                ) : null}
+                {record.postPending.length > 0 ? (
+                  <span className="rec-badge" data-kind="post-pending" title={`待兑现：${record.postPending.map(nameOf).join('、')}`}>
+                    待兑现
+                  </span>
+                ) : null}
                 {record.hasPhoto ? <PhotoThumb checkinId={record.id} /> : null}
                 <RecordBadges backfilled={record.backfilled} violated={record.violated} />
                 <IconButton label="撤销这条记录" onClick={() => void onRemove(record.id)}>
@@ -611,6 +677,7 @@ function DayPanel({
   project,
   day,
   version,
+  nameOf,
   verdictLabel,
   onBackfill,
   onChanged,
@@ -618,6 +685,7 @@ function DayPanel({
   project: Project
   day: string
   version: number
+  nameOf: (id: string) => string
   verdictLabel: string
   onBackfill: () => void
   onChanged: () => Promise<void>
@@ -676,18 +744,22 @@ function DayPanel({
           {records.map((record) => (
             <li key={record.id} className="record">
               <span className="record-value">
-                {isTime(project)
-                  ? record.time !== undefined && record.time !== ''
-                    ? record.time
-                    : formatClock(record.checkedAt)
-                  : `${formatValue(record.value)} ${project.unit}`}
+                {formatValue(record.value)} {project.unit}
               </span>
               <span className="record-meta">
-                {isTime(project) ? '' : formatClock(record.checkedAt)}
+                {formatClock(record.checkedAt)}
                 {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                 {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
               </span>
-              {isLate(project, record) ? <span className="rec-badge" data-kind="late">迟到</span> : null}
+              {record.postUnmet.length > 0 ? (
+                <span className="rec-badge" data-kind="post" title={`未兑现：${record.postUnmet.map(nameOf).join('、')}`}>
+                  未兑现</span>
+              ) : null}
+              {record.postPending.length > 0 ? (
+                <span className="rec-badge" data-kind="post-pending" title={`待兑现：${record.postPending.map(nameOf).join('、')}`}>
+                  待兑现
+                </span>
+              ) : null}
               {record.hasPhoto ? <PhotoThumb checkinId={record.id} /> : null}
               <RecordBadges backfilled={record.backfilled} violated={record.violated} />
               <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>

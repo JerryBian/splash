@@ -61,7 +61,11 @@ func (a *API) handleReady(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
 	defer cancel()
 
+	// Readiness is not behind guard, but it still touches the store; take the
+	// read side of the reset lock so a probe cannot race a closed pool.
+	a.dbMu.RLock()
 	checks := []checkResult{a.checkStore(ctx)}
+	a.dbMu.RUnlock()
 
 	status, code := "ok", http.StatusOK
 	for _, c := range checks {

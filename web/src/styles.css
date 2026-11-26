@@ -728,16 +728,6 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
-.card-reminder {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
-}
-
-/* A pinned project keeps the pin icon as its non-color marker. */
 .card-pin {
   display: inline-flex;
   align-items: center;
@@ -2520,6 +2510,24 @@ button.heat-cell:hover {
   color: var(--warn);
 }
 
+/* Postrequisite commitment chips: pending is a nudge, broken is a failure. */
+.card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.card-link[data-kind='pending'] {
+  color: var(--warn);
+}
+
+.card-link[data-kind='broken'] {
+  color: var(--error);
+}
+
 /* Per-record provenance badges (backfill / violation). */
 .record-badges {
   display: inline-flex;
@@ -2546,7 +2554,12 @@ button.heat-cell:hover {
   color: var(--error);
 }
 
-.rec-badge[data-kind='late'] {
+.rec-badge[data-kind='post'] {
+  background: color-mix(in oklab, var(--error) 12%, var(--card));
+  color: var(--error);
+}
+
+.rec-badge[data-kind='post-pending'] {
   background: color-mix(in oklab, var(--warn) 14%, var(--card));
   color: var(--warn);
 }
@@ -2603,6 +2616,39 @@ button.heat-cell:hover {
   border-color: color-mix(in oklab, var(--warn) 45%, var(--line));
 }
 
+.prereq-list li[data-post='pending'] {
+  border-color: color-mix(in oklab, var(--warn) 45%, var(--line));
+}
+
+.prereq-list li[data-post='broken'] {
+  border-color: color-mix(in oklab, var(--error) 40%, var(--line));
+}
+
+.prereq-list li[data-post='pending'] .prereq-state {
+  color: var(--warn);
+}
+
+.prereq-list li[data-post='broken'] .prereq-state {
+  color: var(--error);
+}
+
+.prereq-list li[data-post='waiting'] .prereq-state {
+  color: var(--muted);
+}
+
+/* Fulfilment line for the same-day postrequisite commitments. */
+.link-rate {
+  margin: 10px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand);
+  font-variant-numeric: tabular-nums;
+}
+
+.link-hint {
+  color: var(--brand);
+}
+
 .prereq-name {
   display: inline-flex;
   align-items: center;
@@ -2624,8 +2670,105 @@ button.heat-cell:hover {
   color: var(--warn);
 }
 
-.prereq-picker {
-  flex-wrap: wrap;
+/* Checkbox multi-select for the project link pickers. */
+.multi-select {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.multi-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.multi-select-trigger[aria-expanded='true'] {
+  border-color: color-mix(in oklab, var(--brand) 55%, var(--line));
+}
+
+.multi-select-summary {
+  padding: 0 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-pop {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  box-shadow: 0 12px 32px color-mix(in oklab, var(--ink) 16%, transparent);
+}
+
+.multi-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.multi-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.multi-select-option:hover,
+.multi-select-option[data-checked='true'] {
+  background: var(--sunken);
+}
+
+.multi-select-option input {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--brand);
+}
+
+.multi-select-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
 }
 
 /* Nature badge: marks a habit to break. Icon + word, never color alone; good
@@ -3775,8 +3918,8 @@ button.heat-cell:hover {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  /* The overview carries six tiles (good progress + bad lapses): three across
-     keeps two tidy rows instead of a stretched orphan. */
+  /* The overview carries six tiles (good progress, bad lapses and links):
+     three across keeps two tidy rows instead of a stretched orphan. */
   .view.stats > .stat-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

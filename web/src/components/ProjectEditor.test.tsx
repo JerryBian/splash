@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { AppProvider } from '../hooks/useApp'
@@ -118,7 +118,7 @@ describe('ProjectEditor', () => {
     expect(screen.getByText('保存修改')).toBeInTheDocument()
   })
 
-  it('creates a time-mode habit with a deadline and a reminder', async () => {
+  it('saves a custom supplement prompt', async () => {
     const fetchMock = stubFetch(routes())
     render(
       <AppProvider initial={adminBootstrap}>
@@ -127,22 +127,51 @@ describe('ProjectEditor', () => {
     )
 
     await userEvent.type(screen.getByLabelText('名称'), '准时睡觉')
-    await userEvent.click(screen.getByText('记录时间'))
-    fireEvent.change(screen.getByLabelText('准时目标（可选）'), { target: { value: '23:00' } })
-    fireEvent.change(screen.getByLabelText('每日提醒（可选）'), { target: { value: '22:30' } })
+    await userEvent.type(screen.getByLabelText('补充说明提示（可选）'), '什么时候睡的？睡了多久？')
     await userEvent.click(screen.getByText('创建项目'))
 
     await waitFor(() => {
       const post = callTo(fetchMock, '/projects', 'POST')
       expect(post).toBeDefined()
       expect(post?.body).toMatchObject({
-        mode: 'time',
+        mode: 'check',
         schedule: 'daily',
-        target: 1,
-        unit: '次',
-        targetTime: '23:00',
-        reminderTime: '22:30',
+        notePrompt: '什么时候睡的？睡了多久？',
       })
+    })
+  })
+
+  it('wires a postrequisite and keeps the two directions exclusive', async () => {
+    const fetchMock = stubFetch(routes())
+    render(
+      <AppProvider initial={adminBootstrap}>
+        <ProjectEditor projectId="new" />
+      </AppProvider>,
+    )
+
+    await userEvent.type(screen.getByLabelText('名称'), '跑步')
+
+    // The fixture project (冥想) is the only candidate. Pick it as 后置 in the
+    // dropdown, then move it to 前置 and back; the payload must reflect only
+    // the last direction.
+    await userEvent.click(screen.getByRole('button', { name: '选择后置项目' }))
+    let posts = screen.getByRole('group', { name: '选择后置项目' })
+    await userEvent.click(within(posts).getByRole('checkbox'))
+
+    await userEvent.click(screen.getByRole('button', { name: '选择前置项目' }))
+    const pres = screen.getByRole('group', { name: '选择前置项目' })
+    expect(within(pres).getByRole('checkbox')).not.toBeChecked()
+    await userEvent.click(within(pres).getByRole('checkbox'))
+
+    await userEvent.click(screen.getByRole('button', { name: '选择后置项目' }))
+    posts = screen.getByRole('group', { name: '选择后置项目' })
+    expect(within(posts).getByRole('checkbox')).not.toBeChecked()
+    await userEvent.click(within(posts).getByRole('checkbox'))
+
+    await userEvent.click(screen.getByText('创建项目'))
+    await waitFor(() => {
+      const post = callTo(fetchMock, '/projects', 'POST')
+      expect(post?.body).toMatchObject({ postrequisites: ['p-1'], prerequisites: [] })
     })
   })
 })

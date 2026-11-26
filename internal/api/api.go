@@ -7,19 +7,22 @@
 //
 // Access model: the whole service sits behind one administrator account
 // (credentials from configuration). Every data route — reads included — is
-// wrapped by guard, which answers 401 before any work happens. Only the auth
-// door (login/logout/me) and the operational probes (health/ready/version) are
-// reachable without a session. There is no anonymous data access and no
+// wrapped by guard, which answers 401 before any work happens (the destructive
+// reset uses guardReset, the same gate plus the exclusive reset lock). Only the
+// auth door (login/logout/me) and the operational probes (health/ready/version)
+// are reachable without a session. There is no anonymous data access and no
 // per-project visibility: a project either exists for the admin or it does not.
 package api
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"uuid"
 
@@ -46,6 +49,10 @@ type Deps struct {
 	Stats      store.StatsStore
 	Export     store.Exporter
 	Import     store.Importer
+	// Reset wipes the database and returns the number of demo projects seeded.
+	// The server supplies it so the API does not need to know the DB path or
+	// whether demo seeding is enabled.
+	Reset func(ctx context.Context) (int, error)
 	// Auth checks credentials, signs sessions and reads the request role.
 	Auth *auth.Authenticator
 	// LoginLimiter throttles login attempts per IP. Nil becomes a default
@@ -76,6 +83,7 @@ type API struct {
 	stats      store.StatsStore
 	export     store.Exporter
 	importer   store.Importer
+	reset      func(ctx context.Context) (int, error)
 	authn      *auth.Authenticator
 	limiter    *auth.Limiter
 	log        *slog.Logger
@@ -85,6 +93,11 @@ type API struct {
 	env        config.Environment
 	repoURL    string
 	info       version.Info
+
+	// dbMu keeps the destructive reset exclusive: every data handler holds a
+	// read lock, and only the reset handler upgrades to a write lock. Without
+	// it, a concurrent query could hit the pool while Reset closes it.
+	dbMu sync.RWMutex
 
 	// routes records the patterns Register installed so the catch-all can tell
 	// "unknown path" apart from "known path, wrong method". See handleUnmatched.
@@ -96,8 +109,9 @@ type API struct {
 // first request.
 func New(deps Deps) *API {
 	if deps.Categories == nil || deps.Projects == nil || deps.Checkins == nil ||
-		deps.Skips == nil || deps.Stats == nil || deps.Export == nil || deps.Import == nil || deps.Auth == nil {
-		panic("api: Deps requires Categories, Projects, Checkins, Skips, Stats, Export, Import and Auth")
+		deps.Skips == nil || deps.Stats == nil || deps.Export == nil || deps.Import == nil ||
+		deps.Reset == nil || deps.Auth == nil {
+		panic("api: Deps requires Categories, Projects, Checkins, Skips, Stats, Export, Import, Reset and Auth")
 	}
 	log := deps.Log
 	if log == nil {
@@ -131,6 +145,7 @@ func New(deps Deps) *API {
 		stats:      deps.Stats,
 		export:     deps.Export,
 		importer:   deps.Import,
+		reset:      deps.Reset,
 		authn:      deps.Auth,
 		limiter:    limiter,
 		log:        log,
@@ -183,6 +198,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.addRoute(mux, "GET "+RoutePrefix+"/stats/overview", a.guard(a.handleOverview))
 	a.addRoute(mux, "GET "+RoutePrefix+"/export", a.guard(a.handleExport))
 	a.addRoute(mux, "POST "+RoutePrefix+"/import", a.guard(a.handleImport))
+	a.addRoute(mux, "POST "+RoutePrefix+"/admin/reset", a.guardReset(a.handleReset))
 
 	// Catch-all for the API subtree. Without it an unknown /api/... path would
 	// fall through to the frontend handler mounted at "/" and be answered with
@@ -298,11 +314,29 @@ func (a *API) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 // guard wraps a data handler with the administrator gate. Register applies it
 // to every route except the auth door and the probes, so reads and writes are
 // protected by construction rather than by each handler remembering to check.
+//
+// The read lock keeps ordinary requests from observing the database while the
+// reset handler has it closed; reset is the only writer of dbMu.
 func (a *API) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !a.requireAdmin(w, r) {
 			return
 		}
+		a.dbMu.RLock()
+		defer a.dbMu.RUnlock()
+		next(w, r)
+	}
+}
+
+// guardReset is guard's exclusive counterpart: the reset handler closes and
+// replaces the database, so it must be the only request touching it.
+func (a *API) guardReset(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.requireAdmin(w, r) {
+			return
+		}
+		a.dbMu.Lock()
+		defer a.dbMu.Unlock()
 		next(w, r)
 	}
 }

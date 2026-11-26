@@ -13,29 +13,29 @@ import (
 // project is the wire representation of a project.
 // web/src/api/types.ts mirrors this type. Change the two together.
 type project struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	Description   string         `json:"description,omitempty"`
-	Icon          string         `json:"icon"`
-	Color         string         `json:"color"`
-	CategoryID    string         `json:"categoryId"` // "" when uncategorized
-	Nature        string         `json:"nature"`     // good | bad
-	Schedule      string         `json:"schedule"`
-	Mode          string         `json:"mode"`
-	Target        float64        `json:"target"`
-	Unit          string         `json:"unit"`
-	Weekdays      []int          `json:"weekdays"`
-	Interval      float64        `json:"interval"`
-	TargetTime    string         `json:"targetTime"`
-	ReminderTime  string         `json:"reminderTime"`
-	StartDate     string         `json:"startDate"`
-	Archived      bool           `json:"archived"`
-	Pinned        bool           `json:"pinned"`
-	Prerequisites []string       `json:"prerequisites"`
-	CreatedAt     string         `json:"createdAt"`
-	UpdatedAt     string         `json:"updatedAt"`
-	Version       int            `json:"version"`
-	Status        *projectStatus `json:"status,omitempty"`
+	ID             string         `json:"id"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description,omitempty"`
+	Icon           string         `json:"icon"`
+	Color          string         `json:"color"`
+	CategoryID     string         `json:"categoryId"` // "" when uncategorized
+	Nature         string         `json:"nature"`     // good | bad
+	Schedule       string         `json:"schedule"`
+	Mode           string         `json:"mode"`
+	Target         float64        `json:"target"`
+	Unit           string         `json:"unit"`
+	Weekdays       []int          `json:"weekdays"`
+	Interval       float64        `json:"interval"`
+	NotePrompt     string         `json:"notePrompt"`
+	StartDate      string         `json:"startDate"`
+	Archived       bool           `json:"archived"`
+	Pinned         bool           `json:"pinned"`
+	Prerequisites  []string       `json:"prerequisites"`
+	Postrequisites []string       `json:"postrequisites"`
+	CreatedAt      string         `json:"createdAt"`
+	UpdatedAt      string         `json:"updatedAt"`
+	Version        int            `json:"version"`
+	Status         *projectStatus `json:"status,omitempty"`
 }
 
 // projectStatus mirrors store.Summary with instants rendered as RFC 3339.
@@ -52,23 +52,33 @@ type projectStatus struct {
 	DueAt         string   `json:"dueAt,omitempty"`
 	LastCheckinAt string   `json:"lastCheckinAt,omitempty"`
 	Unmet         []string `json:"unmet"`
+	PendingPosts  []string `json:"pendingPosts"`
+	BrokenPosts   []string `json:"brokenPosts"`
 }
 
 func toProjectStatus(s store.Summary) *projectStatus {
 	out := &projectStatus{
-		Status:      s.Status,
-		PeriodStart: s.PeriodStart,
-		PeriodEnd:   s.PeriodEnd,
-		Value:       s.Value,
-		Target:      s.Target,
-		TodayValue:  s.TodayValue,
-		Count:       s.Count,
-		Streak:      s.Streak,
-		BestStreak:  s.BestStreak,
-		Unmet:       s.Unmet,
+		Status:       s.Status,
+		PeriodStart:  s.PeriodStart,
+		PeriodEnd:    s.PeriodEnd,
+		Value:        s.Value,
+		Target:       s.Target,
+		TodayValue:   s.TodayValue,
+		Count:        s.Count,
+		Streak:       s.Streak,
+		BestStreak:   s.BestStreak,
+		Unmet:        s.Unmet,
+		PendingPosts: s.PendingPosts,
+		BrokenPosts:  s.BrokenPosts,
 	}
 	if out.Unmet == nil {
 		out.Unmet = []string{}
+	}
+	if out.PendingPosts == nil {
+		out.PendingPosts = []string{}
+	}
+	if out.BrokenPosts == nil {
+		out.BrokenPosts = []string{}
 	}
 	if s.DueAt != nil {
 		out.DueAt = formatTime(*s.DueAt)
@@ -81,26 +91,25 @@ func toProjectStatus(s store.Summary) *projectStatus {
 
 func toProject(p store.Project, status *store.Summary) project {
 	out := project{
-		ID:           p.ID.String(),
-		Name:         p.Name,
-		Description:  p.Description,
-		Icon:         p.Icon,
-		Color:        p.Color,
-		Nature:       p.Nature,
-		Schedule:     string(p.Schedule),
-		Mode:         p.Mode,
-		Target:       p.Target,
-		Unit:         p.Unit,
-		Weekdays:     p.Weekdays,
-		Interval:     p.Interval,
-		TargetTime:   p.TargetTime,
-		ReminderTime: p.ReminderTime,
-		StartDate:    p.StartDate,
-		Archived:     p.Archived,
-		Pinned:       p.Pinned,
-		CreatedAt:    formatTime(p.CreatedAt),
-		UpdatedAt:    formatTime(p.UpdatedAt),
-		Version:      p.Version,
+		ID:          p.ID.String(),
+		Name:        p.Name,
+		Description: p.Description,
+		Icon:        p.Icon,
+		Color:       p.Color,
+		Nature:      p.Nature,
+		Schedule:    string(p.Schedule),
+		Mode:        p.Mode,
+		Target:      p.Target,
+		Unit:        p.Unit,
+		Weekdays:    p.Weekdays,
+		Interval:    p.Interval,
+		NotePrompt:  p.NotePrompt,
+		StartDate:   p.StartDate,
+		Archived:    p.Archived,
+		Pinned:      p.Pinned,
+		CreatedAt:   formatTime(p.CreatedAt),
+		UpdatedAt:   formatTime(p.UpdatedAt),
+		Version:     p.Version,
 	}
 	if p.CategoryID != uuid.Nil() {
 		out.CategoryID = p.CategoryID.String()
@@ -111,6 +120,10 @@ func toProject(p store.Project, status *store.Summary) project {
 	out.Prerequisites = make([]string, 0, len(p.Prerequisites))
 	for _, id := range p.Prerequisites {
 		out.Prerequisites = append(out.Prerequisites, id.String())
+	}
+	out.Postrequisites = make([]string, 0, len(p.Postrequisites))
+	for _, id := range p.Postrequisites {
+		out.Postrequisites = append(out.Postrequisites, id.String())
 	}
 	if status != nil {
 		out.Status = toProjectStatus(*status)
@@ -161,23 +174,23 @@ func (a *API) handleListProjects(w http.ResponseWriter, r *http.Request) {
 
 // projectRequest is the POST body.
 type projectRequest struct {
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Icon          string   `json:"icon"`
-	Color         string   `json:"color"`
-	CategoryID    string   `json:"categoryId"`
-	Nature        string   `json:"nature"`
-	Schedule      string   `json:"schedule"`
-	Mode          string   `json:"mode"`
-	Target        float64  `json:"target"`
-	Unit          string   `json:"unit"`
-	Weekdays      []int    `json:"weekdays"`
-	Interval      float64  `json:"interval"`
-	TargetTime    string   `json:"targetTime"`
-	ReminderTime  string   `json:"reminderTime"`
-	StartDate     string   `json:"startDate"`
-	Pinned        bool     `json:"pinned"`
-	Prerequisites []string `json:"prerequisites"`
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	Icon           string   `json:"icon"`
+	Color          string   `json:"color"`
+	CategoryID     string   `json:"categoryId"`
+	Nature         string   `json:"nature"`
+	Schedule       string   `json:"schedule"`
+	Mode           string   `json:"mode"`
+	Target         float64  `json:"target"`
+	Unit           string   `json:"unit"`
+	Weekdays       []int    `json:"weekdays"`
+	Interval       float64  `json:"interval"`
+	NotePrompt     string   `json:"notePrompt"`
+	StartDate      string   `json:"startDate"`
+	Pinned         bool     `json:"pinned"`
+	Prerequisites  []string `json:"prerequisites"`
+	Postrequisites []string `json:"postrequisites"`
 }
 
 // handleCreateProject serves POST /api/v1/projects (administrator).
@@ -188,23 +201,23 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	created, err := a.projects.Create(r.Context(), store.ProjectInput{
-		Name:          req.Name,
-		Description:   req.Description,
-		Icon:          req.Icon,
-		Color:         req.Color,
-		CategoryID:    req.CategoryID,
-		Nature:        req.Nature,
-		Schedule:      store.ScheduleType(req.Schedule),
-		Mode:          req.Mode,
-		Target:        req.Target,
-		Unit:          req.Unit,
-		Weekdays:      req.Weekdays,
-		Interval:      req.Interval,
-		TargetTime:    req.TargetTime,
-		ReminderTime:  req.ReminderTime,
-		StartDate:     req.StartDate,
-		Pinned:        req.Pinned,
-		Prerequisites: req.Prerequisites,
+		Name:           req.Name,
+		Description:    req.Description,
+		Icon:           req.Icon,
+		Color:          req.Color,
+		CategoryID:     req.CategoryID,
+		Nature:         req.Nature,
+		Schedule:       store.ScheduleType(req.Schedule),
+		Mode:           req.Mode,
+		Target:         req.Target,
+		Unit:           req.Unit,
+		Weekdays:       req.Weekdays,
+		Interval:       req.Interval,
+		NotePrompt:     req.NotePrompt,
+		StartDate:      req.StartDate,
+		Pinned:         req.Pinned,
+		Prerequisites:  req.Prerequisites,
+		Postrequisites: req.Postrequisites,
 	})
 	if err != nil {
 		a.fail(w, r, err)
@@ -242,45 +255,45 @@ func (a *API) handleGetProject(w http.ResponseWriter, r *http.Request) {
 // projectPatchRequest is the PATCH body. Pointers distinguish "absent" from
 // "set to the zero value"; categoryId is a *string so "" can clear it.
 type projectPatchRequest struct {
-	Name          *string   `json:"name,omitempty"`
-	Description   *string   `json:"description,omitempty"`
-	Icon          *string   `json:"icon,omitempty"`
-	Color         *string   `json:"color,omitempty"`
-	CategoryID    *string   `json:"categoryId,omitempty"`
-	Nature        *string   `json:"nature,omitempty"`
-	Schedule      *string   `json:"schedule,omitempty"`
-	Mode          *string   `json:"mode,omitempty"`
-	Target        *float64  `json:"target,omitempty"`
-	Unit          *string   `json:"unit,omitempty"`
-	Weekdays      *[]int    `json:"weekdays,omitempty"`
-	Interval      *float64  `json:"interval,omitempty"`
-	TargetTime    *string   `json:"targetTime,omitempty"`
-	ReminderTime  *string   `json:"reminderTime,omitempty"`
-	StartDate     *string   `json:"startDate,omitempty"`
-	Archived      *bool     `json:"archived,omitempty"`
-	Pinned        *bool     `json:"pinned,omitempty"`
-	Prerequisites *[]string `json:"prerequisites,omitempty"`
+	Name           *string   `json:"name,omitempty"`
+	Description    *string   `json:"description,omitempty"`
+	Icon           *string   `json:"icon,omitempty"`
+	Color          *string   `json:"color,omitempty"`
+	CategoryID     *string   `json:"categoryId,omitempty"`
+	Nature         *string   `json:"nature,omitempty"`
+	Schedule       *string   `json:"schedule,omitempty"`
+	Mode           *string   `json:"mode,omitempty"`
+	Target         *float64  `json:"target,omitempty"`
+	Unit           *string   `json:"unit,omitempty"`
+	Weekdays       *[]int    `json:"weekdays,omitempty"`
+	Interval       *float64  `json:"interval,omitempty"`
+	NotePrompt     *string   `json:"notePrompt,omitempty"`
+	StartDate      *string   `json:"startDate,omitempty"`
+	Archived       *bool     `json:"archived,omitempty"`
+	Pinned         *bool     `json:"pinned,omitempty"`
+	Prerequisites  *[]string `json:"prerequisites,omitempty"`
+	Postrequisites *[]string `json:"postrequisites,omitempty"`
 }
 
 func (req projectPatchRequest) toPatch() store.ProjectPatch {
 	patch := store.ProjectPatch{
-		Name:          req.Name,
-		Description:   req.Description,
-		Icon:          req.Icon,
-		Color:         req.Color,
-		CategoryID:    req.CategoryID,
-		Nature:        req.Nature,
-		Mode:          req.Mode,
-		Target:        req.Target,
-		Unit:          req.Unit,
-		Weekdays:      req.Weekdays,
-		Interval:      req.Interval,
-		TargetTime:    req.TargetTime,
-		ReminderTime:  req.ReminderTime,
-		StartDate:     req.StartDate,
-		Archived:      req.Archived,
-		Pinned:        req.Pinned,
-		Prerequisites: req.Prerequisites,
+		Name:           req.Name,
+		Description:    req.Description,
+		Icon:           req.Icon,
+		Color:          req.Color,
+		CategoryID:     req.CategoryID,
+		Nature:         req.Nature,
+		Mode:           req.Mode,
+		Target:         req.Target,
+		Unit:           req.Unit,
+		Weekdays:       req.Weekdays,
+		Interval:       req.Interval,
+		NotePrompt:     req.NotePrompt,
+		StartDate:      req.StartDate,
+		Archived:       req.Archived,
+		Pinned:         req.Pinned,
+		Prerequisites:  req.Prerequisites,
+		Postrequisites: req.Postrequisites,
 	}
 	if req.Schedule != nil {
 		s := store.ScheduleType(*req.Schedule)

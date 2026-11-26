@@ -6,70 +6,54 @@ import { callTo, stubFetch } from '../test/http'
 import { makeBootstrap, makeProject, TEST_TODAY } from '../test/fixtures'
 import { CheckinSheet } from './CheckinSheet'
 
-const timeProject = makeProject({ id: 'p-t', name: '准时睡觉', mode: 'time', targetTime: '23:00' })
+const checkProject = makeProject({ id: 'p-c', name: '准时睡觉', mode: 'check', notePrompt: '什么时候睡的？睡了多久？' })
 
-describe('CheckinSheet time mode', () => {
-  it('shows a time input and submits the recorded clock time', async () => {
-    const fetchMock = stubFetch({
-      '/api/v1/projects/p-t/checkins': [
-        {
-          method: 'POST',
-          status: 201,
-          body: {
-            id: 'c1', projectId: 'p-t', value: 1, time: '22:40', localDate: TEST_TODAY,
-            checkedAt: '', tzOffset: 0, backfilled: false, violated: false, unmet: [], createdAt: '',
-          },
+function routes() {
+  return {
+    '/api/v1/projects/p-c/checkins': [
+      {
+        method: 'POST',
+        status: 201,
+        body: {
+          id: 'c1', projectId: 'p-c', value: 1, hasPhoto: false, localDate: TEST_TODAY,
+          checkedAt: '', tzOffset: 0, backfilled: false, violated: false, unmet: [],
+          postUnmet: [], postPending: [], createdAt: '',
         },
-        { checkins: [] },
-      ],
-      '/api/v1/projects/p-t/skips': { skips: [] },
-      '/api/v1/projects': { projects: [timeProject], today: TEST_TODAY },
-      '/api/v1/categories': { categories: [] },
-      '/api/v1/stats/overview': makeBootstrap().overview,
-    })
+      },
+      { checkins: [] },
+    ],
+    '/api/v1/projects/p-c/skips': { skips: [] },
+    '/api/v1/projects': { projects: [checkProject], today: TEST_TODAY },
+    '/api/v1/categories': { categories: [] },
+    '/api/v1/stats/overview': makeBootstrap().overview,
+  }
+}
+
+describe('CheckinSheet supplement', () => {
+  it('uses the project prompt as the supplement heading and saves the text', async () => {
+    const fetchMock = stubFetch(routes())
     await act(async () => {
       render(
-        <AppProvider initial={makeBootstrap({ projects: [timeProject] })}>
-          <CheckinSheet project={timeProject} initialDate={TEST_TODAY} onClose={() => {}} />
+        <AppProvider initial={makeBootstrap({ projects: [checkProject] })}>
+          <CheckinSheet project={checkProject} initialDate={TEST_TODAY} onClose={() => {}} />
         </AppProvider>,
       )
     })
 
-    // A time input (not a quantity stepper) is offered, with the deadline hint.
-    expect(screen.getByLabelText('时间')).toBeInTheDocument()
-    expect(screen.getByText(/准时目标 23:00/)).toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole('button', { name: /记录 \d{2}:\d{2}/ }))
+    expect(screen.getByText('什么时候睡的？睡了多久？')).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText('什么时候睡的？睡了多久？'), '22:40 入睡，睡了 7 小时')
+    await userEvent.click(screen.getByRole('button', { name: '打卡' }))
     await waitFor(() => {
       const post = callTo(fetchMock, '/checkins', 'POST')
       expect(post).toBeDefined()
-      expect(post?.body).toMatchObject({ value: 1 })
-      const body = post?.body as { time?: string } | undefined
-      expect(body?.time).toMatch(/^\d{2}:\d{2}$/)
+      expect(post?.body).toMatchObject({ note: '22:40 入睡，睡了 7 小时', value: 1 })
     })
   })
 })
 
 describe('CheckinSheet proof photo', () => {
   it('reads a photo into a data URL and submits it with the record', async () => {
-    const checkProject = makeProject({ id: 'p-c', name: '冥想', mode: 'check' })
-    const fetchMock = stubFetch({
-      '/api/v1/projects/p-c/checkins': [
-        {
-          method: 'POST',
-          status: 201,
-          body: {
-            id: 'c2', projectId: 'p-c', value: 1, hasPhoto: true, localDate: TEST_TODAY,
-            checkedAt: '', tzOffset: 0, backfilled: false, violated: false, unmet: [], createdAt: '',
-          },
-        },
-        { checkins: [] },
-      ],
-      '/api/v1/projects/p-c/skips': { skips: [] },
-      '/api/v1/projects': { projects: [checkProject], today: TEST_TODAY },
-      '/api/v1/categories': { categories: [] },
-      '/api/v1/stats/overview': makeBootstrap().overview,
-    })
+    const fetchMock = stubFetch(routes())
     await act(async () => {
       render(
         <AppProvider initial={makeBootstrap({ projects: [checkProject] })}>

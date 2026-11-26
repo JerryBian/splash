@@ -74,13 +74,16 @@ func New(cfg config.Config, log *slog.Logger, db *store.DB) (*Server, error) {
 	// immutable and should be cached forever.
 	apiMux := http.NewServeMux()
 	api.New(api.Deps{
-		Categories:          db.Categories(),
-		Projects:            db.Projects(),
-		Checkins:            db.Checkins(),
-		Skips:               db.Skips(),
-		Stats:               db.Stats(),
-		Export:              db,
-		Import:              db,
+		Categories: db.Categories(),
+		Projects:   db.Projects(),
+		Checkins:   db.Checkins(),
+		Skips:      db.Skips(),
+		Stats:      db.Stats(),
+		Export:     db,
+		Import:     db,
+		Reset: func(ctx context.Context) (int, error) {
+			return db.Reset(ctx, cfg.SeedDemo)
+		},
 		Auth:                authn,
 		Log:                 log,
 		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,

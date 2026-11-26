@@ -17,18 +17,18 @@ to `internal/web/dist` and baked in with `//go:embed all:dist`. SQLite on disk.
   cross-compiles). Everything else is stdlib. Justify any new dependency.
 - **One role:** a single administrator (`SPLASH_ADMIN_*`). Every data route,
   reads included, requires login. No anonymous access, no per-project visibility.
-- **Domain:** categories; projects with six schedule families, three completion
-  modes (`check`/`value`/`time`) and a good/bad `nature`; check-ins (value, note,
-  mood, a clock `time` for time mode, and an optional proof `photo`); skips; a
-  cycle-free prerequisite graph; a **pure** schedule engine deriving streaks/
-  misses/heatmaps/trends/violations on read. Time mode adds punctuality (on-time
-  rate / on-time count / late count / average time) vs `targetTime`;
-  `reminderTime` drives in-app reminders plus optional browser notifications;
-  `pinned` floats a project to the top of Today; achievements are derived
-  milestones (never stored).
+- **Domain:** categories; projects with six schedule families, two completion
+  modes (`check`/`value`) and a good/bad `nature`; check-ins (value, note, mood,
+  an optional proof `photo`); skips; a cycle-free **same-day link graph** with
+  `requires` (prerequisite) and `implies` (postrequisite) edges; a **pure**
+  schedule engine deriving streaks/misses/heatmaps/trends/link violations on
+  read. A project may carry a `notePrompt` that labels the free-text supplement
+  on each check-in; `pinned` floats it to the top of Today; achievements are
+  derived milestones (never stored).
 - **Bad habits** (`nature=bad`): a check-in records a lapse; any occurrence spoils
   the period (`missed`), a clean ended period is `done`, the streak counts periods
-  survived clean. Always check mode; `interval_hours` is rejected.
+  survived clean. Always check mode; `interval_hours` is rejected, and a bad habit
+  cannot have postrequisites (abstention has no completion event to trigger one).
 
 ## Verify before declaring done
 
@@ -119,24 +119,41 @@ to HTTP status.
   heatmaps use `local_date`; only interval-hours countdown + history ordering use
   `checked_at`. A backfill sets `local_date` to the requested day, `checked_at` to
   noon UTC of it. Don't "fix" one to match the other.
-- Punctuality compares clocks on a **24-hour circle** (`LateForDeadline` in Go,
-  `isLate` in TS): a deadline at 00:30 treats 23:40 as early and 00:40 as late, so
-  never replace it with a lexicographic `"HH:MM"` string compare.
+- A check-in's free-text `note` is the supplement field; a project's
+  `notePrompt` only labels it (never stored on the check-in). Show it in every
+  record view — history, day panel, and the sheet's day list — so a supplement
+  never looks lost after entry.
 - Proof photos are data URLs capped at `MaxPhotoBytes` (400 KB). They are **never**
   embedded in list/stats responses — those carry `hasPhoto`, and
   `GET /checkins/{id}/photo` streams the bytes (immutable, private cache). Export
   and import still carry the data URL, which is why `/import` uses the 32 MiB
   configuration ceiling instead of the configured default body limit.
+- **Database reset closes the only SQLite pool.** `DB.Reset` deletes the file and
+  sidecars and reopens the same DSN; it requires the administrator password and
+  the exclusive `api.dbMu` write lock. Every data route takes the read lock via
+  `guard` (readiness takes it explicitly), and the reset route uses `guardReset`.
+  Never register reset with plain `guard` or call `DB.Reset` while another query
+  is in flight. A successful reset keeps the config-signed session alive, so the
+  client does a full reload; demo data returns only when `SPLASH_SEED_DEMO` is on.
 - Pinned projects leave their category group and render once in Today's 置顶
   section. Don't render them in both places.
-- Statuses are derived, never stored (only `checkins.backfilled` is stored). A
-  backfill/undo repairs history retroactively; no migration needed for schedule
-  rules.
+- **Same-day links live in one `project_links` table** (`kind` = `requires` or
+  `implies`). `requires` is a prerequisite, `implies` a postrequisite; both are
+  same-day and feed one cycle rule. The same target may not appear on both sides
+  of one project. Postrequisites on a bad-habit source are rejected.
+- Postrequisite verdicts are **timing-aware**: today's completion is
+  `pendingPosts` (still fulfillable), a closed completion day is
+  `brokenPosts`/`BrokenCommitments` (`未兑现`). They gate the *report*, not the
+  habit's own done/missed status: the run still happened, the broken promise is
+  recorded separately and clears when the target is backfilled to the same day.
+  Resolution of a target is `PrereqSatisfied`: archived/skipped/rest count as
+  resolved, a good target needs its period target, a bad target needs a clean day.
 - `schema.sql` is the frozen v1 baseline. Schema changes go in a new
   `migrationNSQL` const + `schemaVersion` bump in `db.migrate` — never add columns
   to `schema.sql` (fresh DBs run migrations too → collision).
-- Prerequisite cycles/self/dangling edges rejected in `checkPrereqGraph`. Ids are
-  returned as-is (one admin, no anonymous stripping).
+- Prerequisite/postrequisite cycles, self-links and dangling edges are rejected
+  in `checkLinkGraph`. Ids are returned as-is (one admin, no anonymous
+  stripping).
 - Session cookie is browser-scoped (no MaxAge); token expiry is an idle timeout
   slid by `auth.Middleware` + `useSessionHeartbeat`. Don't add MaxAge or make
   expiry absolute. Production defaults `CookieSecure=true`; HSTS is

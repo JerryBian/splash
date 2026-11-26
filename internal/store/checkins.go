@@ -32,7 +32,7 @@ var _ CheckinStore = (*Checkins)(nil)
 // checkinColumns is the writable column set shared by INSERT and SELECT. The
 // photo payload is deliberately absent: it is written explicitly on create and
 // only read by the photo endpoint and a backup dump.
-const checkinColumns = `id, project_id, value, note, mood, time, local_date, checked_at, tz_offset, backfilled, created_at`
+const checkinColumns = `id, project_id, value, note, mood, local_date, checked_at, tz_offset, backfilled, created_at`
 
 // checkinSelect adds the derived has-photo flag. length() is answered from the
 // record header, so a history page never pulls the base64 payload along.
@@ -62,17 +62,8 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 	backfilled := date != clientToday
 
 	value := n.Value
-	if proj.Mode == ModeCheck || proj.Mode == ModeTime {
-		value = 1 // one record completes the period; quantity is meaningless
-	}
-	// A time-mode record carries a wall-clock time; when the client sends none
-	// (a quick tap), default to the client's current local time.
-	clock := strings.TrimSpace(n.Time)
-	if proj.Mode == ModeTime && clock == "" {
-		clock = now.Add(time.Duration(n.TZOffset) * time.Minute).Format("15:04")
-	}
-	if proj.Mode != ModeTime {
-		clock = ""
+	if proj.Mode == ModeCheck {
+		value = 1 // one tick completes the period; quantity is meaningless
 	}
 	checkedAt := now
 	if backfilled {
@@ -87,7 +78,6 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 		Value:      value,
 		Note:       n.Note,
 		Mood:       n.Mood,
-		Time:       clock,
 		Photo:      n.Photo,
 		HasPhoto:   n.Photo != "",
 		LocalDate:  date,
@@ -97,8 +87,8 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 		CreatedAt:  now,
 	}
 	_, err = s.db.sql.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`, photo)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.Time, c.LocalDate,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.LocalDate,
 		toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt), c.Photo)
 	if err != nil {
 		return Checkin{}, fmt.Errorf("create checkin: %w", err)
@@ -247,7 +237,7 @@ func scanCheckin(row rowScanner) (Checkin, error) {
 	var id, projectID string
 	var checkedAt, createdAt int64
 	var backfilled, hasPhoto int
-	if err := row.Scan(&id, &projectID, &c.Value, &c.Note, &c.Mood, &c.Time, &c.LocalDate,
+	if err := row.Scan(&id, &projectID, &c.Value, &c.Note, &c.Mood, &c.LocalDate,
 		&checkedAt, &c.TZOffset, &backfilled, &createdAt, &hasPhoto); err != nil {
 		return Checkin{}, err
 	}

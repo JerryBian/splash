@@ -15,6 +15,7 @@ import type {
   ProjectPatch,
   ProjectStats,
   Readiness,
+  ResetResult,
   Session,
   Skip,
   VersionInfo,
@@ -286,13 +287,17 @@ export const api = {
   /** Restores a backup additively (by id); existing data is never overwritten. */
   importData: (data: ExportData): Promise<ImportCounts> =>
     request<ImportCounts>('/import', { method: 'POST', body: data }),
+
+  /** Deletes the server database and returns the number of demo projects re-seeded. */
+  resetDatabase: (password: string): Promise<ResetResult> =>
+    request<ResetResult>('/admin/reset', { method: 'POST', body: { password } }),
 }
 
 /** An empty dashboard, used when nobody is signed in yet. */
 function emptyOverview(today: string): Overview {
   return {
     today: { date: today, total: 0, done: 0, pending: 0, skipped: 0, due: 0, slipped: 0 },
-    totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 },
+    totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0, postReqs: 0, postViolations: 0 },
     activity: [],
     categories: [],
     leaders: [],

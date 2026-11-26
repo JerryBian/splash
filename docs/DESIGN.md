@@ -25,12 +25,13 @@ open transaction — the transaction holds the only connection the pool has.
 
 ## Statuses are derived, never stored
 
-Streaks, misses, heatmaps and prerequisite violations are computed from
-check-ins + skips + the schedule + the prerequisite graph on every read
-(`store.BuildStats` / `store.PrereqSatisfied`, both pure). There is no cron job
-to drift and no status column to repair: backfilling a day repairs a streak
-retroactively, and backfilling a prerequisite clears the dependent project's
-violation for that day.
+Streaks, misses, heatmaps, prerequisite violations, postrequisite commitments
+and their broken history are computed from check-ins + skips + the schedule +
+the link graph on every read (`store.BuildStats` / `store.PrereqSatisfied`, both
+pure). There is no cron job to drift and no status column to repair: backfilling
+a day repairs a streak retroactively, backfilling a prerequisite clears the
+dependent project's violation for that day, and backfilling a postrequisite
+clears `未兑现` for the day it was owed.
 
 ## The client's day is the day
 
@@ -39,35 +40,66 @@ timezone), not the server's clock. Instants (`checked_at`) drive only the
 interval-hours countdown and history ordering. A backfill sets `local_date` to
 the requested day and `checked_at` to noon UTC of that day.
 
-## Time-of-day habits
+## Supplement notes
 
-A time-mode check-in records a wall-clock `time` ("23:40") alongside the usual
-day. A period completes on one record, exactly like check mode; `targetTime`
-adds punctuality on top: on-time rate, on-time/late counts and the mean recorded
-time. The mean is **circular** (the vector mean on the 24-hour clock), so 23:50
-and 00:10 average to 00:00 rather than to a same-day 12:00; samples spread evenly
-around the clock have no meaningful mean, and the UI shows "—" there.
+Every check-in carries an optional free-text `note`. A project may set a
+`notePrompt` — "什么时候睡的？睡了多久？" — which becomes the note's heading in
+the record sheet; the note itself is written per check-in and shown verbatim in
+the history, the day panel and the sheet's day list. This replaced the earlier
+clock-time mode: when migration 7 removed `mode=time`, any recorded clock values
+were appended to the note and the old deadline became the starting prompt, so
+the useful data survives without a special-case field.
 
-Late is decided on a **24-hour circle**: the gap from the deadline to the record,
-wrapped into a day, counts as late only in the first ±12 hours. That is what
-makes "asleep by 00:30" treat 23:40 as early and 00:40 as late, without asking
-the user which side of midnight the deadline sits on. The credited `local_date`
-still comes from the client, so a record logged after midnight belongs to the
-new day; recording last night after the fact is what the backfill date is for.
-`LateForDeadline` in Go and `isLate` in TypeScript implement the same rule and
-carry the same table tests.
+## Same-day links
 
-## Pinned, reminders and photos
+Prerequisites and postrequisites are **one directed graph**, stored as
+`project_links(source_id, target_id, kind)`:
+
+- `requires` — a prerequisite: the target must be resolved on a day the source
+  is checked. If it is not, the check-in carries a prerequisite violation.
+- `implies` — a postrequisite: a completed source commits the target to the same
+  day. If the target is not resolved, the source carries an unfulfilled
+  commitment.
+
+Both directions are same-day and share one cycle rule: a target can never reach
+its source through the union of both kinds. A pair cannot be both a prerequisite
+and a postrequisite of the same project, and a bad habit cannot have
+postrequisites because abstention has no completion event.
+
+A postrequisite fires on the source's **completion day** — the first day its
+period target was reached (for a weekly goal of three, the day of the third
+check-in, not every later day of the week). For `interval_hours` there is no
+period target, so every day with a check-in is its own event and commits that
+day. Targets resolve under the same rule as prerequisites: archived, skipped and
+not-scheduled projects count as resolved; a good target needs its period target
+by that day, a bad target needs a clean day. Today's completion is `pending`
+(still fulfillable); once the day closes, an unresolved target becomes `broken`
+and stays in the lifetime `BrokenCommitments` until the target is backfilled onto
+that same day.
+
+The source's own `done`/`missed` status is **not rewritten** by a broken
+commitment: the run still happened, and erasing it would make the calendar lie.
+The broken promise is a separate derived violation with its own counts, list and
+completion rate, so the pair is enforced without conflating fact and promise.
+
+## Destructive reset
+
+`POST /admin/reset` is the one operation that cannot run alongside anything else.
+A valid session is not enough: the administrator re-enters the configured
+password, checked constant-time, so a borrowed browser cannot erase the data.
+The handler takes an exclusive `dbMu`; every data route holds its read side
+(and readiness too), so in-flight requests finish first and new ones wait. It
+then closes the SQLite pool, removes the database and its `-wal`/`-shm`/
+`-journal` sidecars, reopens the same path, reapplies pragmas and migrations,
+and re-seeds demo data only when `SPLASH_SEED_DEMO` is on. The session lives in
+config-signed cookies, not SQLite, so it survives; the client reloads to drop
+every cached list. If deletion fails, the store reopens the old file rather than
+leaving the process with a closed pool.
+
+## Pinned and photos
 
 `pinned` is one boolean on the project and the only stored ordering preference:
 a pinned project leaves its category group and renders once at the top of Today.
-
-Reminders are client-side on purpose (`reminderTime`): the server has no
-scheduler and no push channel. While the app is open, a reminder is due for a
-30-minute grace window after its time, never for a day already done/skipped/
-rest, and once per project per local day (the fired keys persist in
-localStorage). Browser notifications are opt-in from the settings page, because
-permission prompts not tied to a user gesture are ignored by modern browsers.
 
 A proof photo is one optional data URL on a check-in, capped at 400 KB. Bulk
 reads (list, stats, overview, history) carry only `hasPhoto`; the bytes come from
@@ -79,9 +111,9 @@ its own, larger body cap.
 ## Login means everything
 
 The whole service sits behind one administrator. Every data route — list,
-detail, stats, check-ins, skips, categories, overview, export — answers `401`
-without a session; only login/logout/me and the probes are public. There is no
-per-project visibility flag. Login failures are uniform and rate-limited per
+detail, stats, check-ins, skips, categories, overview, export, reset — answers
+`401` without a session; only login/logout/me and the probes are public. There is
+no per-project visibility flag. Login failures are uniform and rate-limited per
 IP; passwords are compared constant-time.
 
 ## Good habits and bad habits
@@ -106,14 +138,15 @@ statuses use shapes (dashed = skipped, × = missed) as well as color.
 
 ```
 Category 1──* Project 1──* Checkin   (value in the project's unit, note, mood,
-                    └──* Skip        clock time for time mode, optional photo,
-                                     local_date + checked_at instant)
+                    └──* Skip        optional photo, local_date + checked_at)
+             Project *──* Project    (same-day links: requires / implies)
 ```
 
 A `Project` carries one of six schedules; `target` means units per period
 (day / ISO week / calendar month / N-day window), except `interval_hours`,
 which has a rolling countdown instead of periods. It also carries the optional
-`targetTime` (punctuality deadline), `reminderTime` (daily nudge) and `pinned`
-(Today ordering). Extending the domain means: add the aggregate in
-`internal/store`, its handlers in `internal/api`, and the mirror types in
-`web/src/api/types.ts` — the two ends of the contract change together.
+`notePrompt` (a heading for check-in supplements), `pinned` (Today ordering) and
+two same-day link lists (`prerequisites` / `postrequisites`). Extending the
+domain means: add the aggregate in `internal/store`, its handlers in
+`internal/api`, and the mirror types in `web/src/api/types.ts` — the two ends
+of the contract change together.

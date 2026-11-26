@@ -33,7 +33,7 @@ type Projects struct{ db *DB }
 var _ ProjectStore = (*Projects)(nil)
 
 const projectColumns = `id, name, description, icon, color, category_id, nature, schedule, mode,
-	target, unit, weekdays, interval_value, target_time, reminder_time, start_date, archived, pinned,
+	target, unit, weekdays, interval_value, note_prompt, start_date, archived, pinned,
 	created_at, updated_at, version`
 
 // Create validates and stores a new project.
@@ -59,45 +59,46 @@ func (s *Projects) Create(ctx context.Context, in ProjectInput) (Project, error)
 		categoryID = id
 	}
 
-	prereqs := parsePrerequisites(n.Prerequisites)
-	if err := s.checkPrereqGraph(ctx, uuid.Nil(), prereqs); err != nil {
+	prereqs := parseLinks(n.Prerequisites)
+	posts := parseLinks(n.Postrequisites)
+	if err := s.checkLinkGraph(ctx, uuid.Nil(), prereqs, posts); err != nil {
 		return Project{}, err
 	}
 
 	now := s.db.now().UTC().Truncate(1e6)
 	p := Project{
-		ID:            uuid.NewV7(),
-		Name:          n.Name,
-		Description:   n.Description,
-		Icon:          n.Icon,
-		Color:         n.Color,
-		CategoryID:    categoryID,
-		Nature:        n.Nature,
-		Schedule:      n.Schedule,
-		Mode:          n.Mode,
-		Target:        n.Target,
-		Unit:          n.Unit,
-		Weekdays:      n.Weekdays,
-		Interval:      n.Interval,
-		TargetTime:    n.TargetTime,
-		ReminderTime:  n.ReminderTime,
-		StartDate:     n.StartDate,
-		Pinned:        n.Pinned,
-		Prerequisites: prereqs,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		Version:       1,
+		ID:             uuid.NewV7(),
+		Name:           n.Name,
+		Description:    n.Description,
+		Icon:           n.Icon,
+		Color:          n.Color,
+		CategoryID:     categoryID,
+		Nature:         n.Nature,
+		Schedule:       n.Schedule,
+		Mode:           n.Mode,
+		Target:         n.Target,
+		Unit:           n.Unit,
+		Weekdays:       n.Weekdays,
+		Interval:       n.Interval,
+		NotePrompt:     n.NotePrompt,
+		StartDate:      n.StartDate,
+		Pinned:         n.Pinned,
+		Prerequisites:  prereqs,
+		Postrequisites: posts,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		Version:        1,
 	}
 	_, err := s.db.sql.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID.String(), p.Name, p.Description, p.Icon, p.Color, categoryArg(p.CategoryID),
 		p.Nature, string(p.Schedule), p.Mode, p.Target, p.Unit, weekdaysCSV(p.Weekdays),
-		p.Interval, p.TargetTime, p.ReminderTime, p.StartDate, boolInt(p.Archived), boolInt(p.Pinned),
+		p.Interval, p.NotePrompt, p.StartDate, boolInt(p.Archived), boolInt(p.Pinned),
 		toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
 	if err != nil {
 		return Project{}, fmt.Errorf("create project: %w", err)
 	}
-	if err := s.setPrereqs(ctx, p.ID, prereqs); err != nil {
+	if err := s.setLinks(ctx, p.ID, prereqs, posts); err != nil {
 		return Project{}, err
 	}
 	return p, nil
@@ -114,11 +115,12 @@ func (s *Projects) Get(ctx context.Context, id uuid.UUID) (Project, error) {
 	if err != nil {
 		return Project{}, fmt.Errorf("get project %s: %w", id, errNoRows(err, "project "+id.String()))
 	}
-	edges, err := s.prereqMap(ctx, []uuid.UUID{p.ID})
+	requires, implies, err := s.linkMaps(ctx, []uuid.UUID{p.ID})
 	if err != nil {
 		return Project{}, err
 	}
-	p.Prerequisites = edges[p.ID]
+	p.Prerequisites = requires[p.ID]
+	p.Postrequisites = implies[p.ID]
 	return p, nil
 }
 
@@ -159,12 +161,13 @@ func (s *Projects) List(ctx context.Context, q ProjectQuery) ([]Project, error) 
 	for i, p := range out {
 		ids[i] = p.ID
 	}
-	edges, err := s.prereqMap(ctx, ids)
+	requires, implies, err := s.linkMaps(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
 	for i := range out {
-		out[i].Prerequisites = edges[out[i].ID]
+		out[i].Prerequisites = requires[out[i].ID]
+		out[i].Postrequisites = implies[out[i].ID]
 	}
 	return out, nil
 }
@@ -195,7 +198,7 @@ func (s *Projects) Update(ctx context.Context, id uuid.UUID, patch ProjectPatch,
 			return Project{}, err
 		}
 	}
-	if err := s.checkPrereqGraph(ctx, id, next.Prerequisites); err != nil {
+	if err := s.checkLinkGraph(ctx, id, next.Prerequisites, next.Postrequisites); err != nil {
 		return Project{}, err
 	}
 	next.UpdatedAt = s.db.now().UTC().Truncate(1e6)
@@ -203,12 +206,12 @@ func (s *Projects) Update(ctx context.Context, id uuid.UUID, patch ProjectPatch,
 
 	res, err := s.db.sql.ExecContext(ctx, `UPDATE projects SET
 		name = ?, description = ?, icon = ?, color = ?, category_id = ?, nature = ?, schedule = ?, mode = ?,
-		target = ?, unit = ?, weekdays = ?, interval_value = ?, target_time = ?, reminder_time = ?,
+		target = ?, unit = ?, weekdays = ?, interval_value = ?, note_prompt = ?,
 		start_date = ?, archived = ?, pinned = ?, updated_at = ?, version = ?
 		WHERE id = ? AND version = ?`,
 		next.Name, next.Description, next.Icon, next.Color, categoryArg(next.CategoryID),
 		next.Nature, string(next.Schedule), next.Mode, next.Target, next.Unit, weekdaysCSV(next.Weekdays),
-		next.Interval, next.TargetTime, next.ReminderTime, next.StartDate, boolInt(next.Archived), boolInt(next.Pinned),
+		next.Interval, next.NotePrompt, next.StartDate, boolInt(next.Archived), boolInt(next.Pinned),
 		toMillis(next.UpdatedAt), next.Version, id.String(), current.Version)
 	if err != nil {
 		return Project{}, fmt.Errorf("update project %s: %w", id, err)
@@ -220,7 +223,7 @@ func (s *Projects) Update(ctx context.Context, id uuid.UUID, patch ProjectPatch,
 		}
 		return Project{}, fmt.Errorf("%w: project %s changed during update", ErrVersionConflict, id)
 	}
-	if err := s.setPrereqs(ctx, id, next.Prerequisites); err != nil {
+	if err := s.setLinks(ctx, id, next.Prerequisites, next.Postrequisites); err != nil {
 		return Project{}, err
 	}
 	return next, nil
@@ -254,7 +257,7 @@ func scanProject(row rowScanner) (Project, error) {
 	var createdAt, updatedAt int64
 	if err := row.Scan(&id, &p.Name, &p.Description, &p.Icon, &p.Color, &categoryID,
 		&p.Nature, &p.Schedule, &p.Mode, &p.Target, &p.Unit, &weekdays, &p.Interval,
-		&p.TargetTime, &p.ReminderTime, &p.StartDate,
+		&p.NotePrompt, &p.StartDate,
 		&archived, &pinned, &createdAt, &updatedAt, &p.Version); err != nil {
 		return Project{}, err
 	}
@@ -266,117 +269,4 @@ func scanProject(row rowScanner) (Project, error) {
 	p.CreatedAt = fromMillis(createdAt)
 	p.UpdatedAt = fromMillis(updatedAt)
 	return p, nil
-}
-
-// prereqMap loads the prerequisite edges for a set of projects in one query.
-func (s *Projects) prereqMap(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
-	out := make(map[uuid.UUID][]uuid.UUID, len(ids))
-	if len(ids) == 0 {
-		return out, nil
-	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	args := make([]any, len(ids))
-	for i, id := range ids {
-		args[i] = id.String()
-		out[id] = []uuid.UUID{}
-	}
-	rows, err := s.db.sql.QueryContext(ctx,
-		`SELECT project_id, requires_id FROM prerequisites WHERE project_id IN (`+placeholders+`) ORDER BY requires_id`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("load prerequisites: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var pid, rid string
-		if err := rows.Scan(&pid, &rid); err != nil {
-			return nil, fmt.Errorf("load prerequisites: %w", err)
-		}
-		p, _ := uuid.Parse(pid)
-		r, _ := uuid.Parse(rid)
-		out[p] = append(out[p], r)
-	}
-	return out, rows.Err()
-}
-
-// setPrereqs replaces the edge list for one project.
-func (s *Projects) setPrereqs(ctx context.Context, id uuid.UUID, prereqs []uuid.UUID) error {
-	if _, err := s.db.sql.ExecContext(ctx, `DELETE FROM prerequisites WHERE project_id = ?`, id.String()); err != nil {
-		return fmt.Errorf("replace prerequisites: %w", err)
-	}
-	for _, r := range prereqs {
-		if _, err := s.db.sql.ExecContext(ctx,
-			`INSERT INTO prerequisites (project_id, requires_id) VALUES (?, ?)`, id.String(), r.String()); err != nil {
-			return fmt.Errorf("replace prerequisites: %w", err)
-		}
-	}
-	return nil
-}
-
-// checkPrereqGraph validates that every prerequisite exists and that wiring
-// them for `id` (uuid.Nil() for a not-yet-created project) introduces no cycle.
-// The graph is small, so a full load + DFS is cheaper than recursive SQL.
-func (s *Projects) checkPrereqGraph(ctx context.Context, id uuid.UUID, prereqs []uuid.UUID) error {
-	if len(prereqs) == 0 {
-		return nil
-	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(prereqs)), ",")
-	args := make([]any, len(prereqs))
-	for i, r := range prereqs {
-		args[i] = r.String()
-	}
-	var found int
-	if err := s.db.sql.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM projects WHERE id IN (`+placeholders+`)`, args...).Scan(&found); err != nil {
-		return fmt.Errorf("validate prerequisites: %w", err)
-	}
-	if found != len(prereqs) {
-		return ValidationErrors{{Field: "prerequisites", Message: "references a project that does not exist"}}
-	}
-
-	rows, err := s.db.sql.QueryContext(ctx, `SELECT project_id, requires_id FROM prerequisites`)
-	if err != nil {
-		return fmt.Errorf("validate prerequisites: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-	adj := map[uuid.UUID][]uuid.UUID{}
-	for rows.Next() {
-		var pid, rid string
-		if err := rows.Scan(&pid, &rid); err != nil {
-			return fmt.Errorf("validate prerequisites: %w", err)
-		}
-		p, _ := uuid.Parse(pid)
-		r, _ := uuid.Parse(rid)
-		adj[p] = append(adj[p], r)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("validate prerequisites: %w", err)
-	}
-	if id != uuid.Nil() {
-		adj[id] = prereqs
-	}
-	// DFS from each new prerequisite; reaching `id` means a cycle.
-	target := id
-	seen := map[uuid.UUID]bool{}
-	var visit func(uuid.UUID) bool
-	visit = func(n uuid.UUID) bool {
-		if target != uuid.Nil() && n == target {
-			return true
-		}
-		if seen[n] {
-			return false
-		}
-		seen[n] = true
-		for _, next := range adj[n] {
-			if visit(next) {
-				return true
-			}
-		}
-		return false
-	}
-	for _, r := range prereqs {
-		if visit(r) {
-			return ValidationErrors{{Field: "prerequisites", Message: "would create a dependency cycle"}}
-		}
-	}
-	return nil
 }

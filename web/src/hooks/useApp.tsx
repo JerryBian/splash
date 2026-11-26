@@ -12,14 +12,6 @@ import { api, setUnauthorizedHandler } from '../api/client'
 import type { Bootstrap, Category, Overview, Project, Session } from '../api/types'
 import { localToday } from '../lib/date'
 import { describeError } from '../lib/errors'
-import {
-  loadNotificationsEnabled,
-  notificationPermission,
-  notificationsSupported,
-  requestNotificationPermission,
-  saveNotificationsEnabled,
-  type NotificationSupport,
-} from '../lib/notify'
 import { applyTheme, loadTheme, saveTheme, watchSystemTheme, type ThemeChoice } from '../lib/theme'
 
 export type ToastTone = 'ok' | 'error' | 'info'
@@ -30,17 +22,6 @@ export type Toast = {
   tone: ToastTone
 }
 
-/** Browser-notification state for the daily reminders. */
-export type NotificationSettings = {
-  supported: boolean
-  permission: NotificationSupport
-  /** True only when the user opted in and the browser granted permission. */
-  enabled: boolean
-  /** Requests permission from a user gesture (the settings switch). */
-  enable: () => Promise<void>
-  disable: () => void
-}
-
 type AppContextValue = {
   session: Session
   projects: Project[]
@@ -49,7 +30,6 @@ type AppContextValue = {
   today: string
   theme: ThemeChoice
   setTheme: (choice: ThemeChoice) => void
-  notifications: NotificationSettings
   /** Re-reads projects, categories and the overview after a mutation. */
   refresh: () => Promise<void>
   /** Signs out and returns to the login gate. */
@@ -98,10 +78,6 @@ export function AppProvider({
   const [today, setToday] = useState<string>(initial.today)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [theme, setThemeState] = useState<ThemeChoice>(loadTheme)
-  // Permission is read once at startup; the settings switch refreshes it after
-  // asking. Enabled is persisted per device, never server-side.
-  const [notifyPermission, setNotifyPermission] = useState<NotificationSupport>(notificationPermission)
-  const [notifyEnabled, setNotifyEnabled] = useState<boolean>(loadNotificationsEnabled)
   const timers = useRef<number[]>([])
 
   const toast = useCallback((message: string, tone: ToastTone = 'info') => {
@@ -165,33 +141,6 @@ export function AppProvider({
     applyTheme(choice)
   }, [])
 
-  const enableNotifications = useCallback(async () => {
-    const permission = await requestNotificationPermission()
-    setNotifyPermission(permission)
-    const granted = permission === 'granted'
-    setNotifyEnabled(granted)
-    saveNotificationsEnabled(granted)
-    if (!granted) {
-      toast(permission === 'denied' ? '浏览器拒绝了通知权限，可在站点设置里恢复' : '当前浏览器不支持通知', 'error')
-    }
-  }, [toast])
-
-  const disableNotifications = useCallback(() => {
-    setNotifyEnabled(false)
-    saveNotificationsEnabled(false)
-  }, [])
-
-  const notifications = useMemo<NotificationSettings>(
-    () => ({
-      supported: notificationsSupported(),
-      permission: notifyPermission,
-      enabled: notifyEnabled && notifyPermission === 'granted',
-      enable: enableNotifications,
-      disable: disableNotifications,
-    }),
-    [notifyPermission, notifyEnabled, enableNotifications, disableNotifications],
-  )
-
   // Apply the stored preference on mount and follow the OS while in system mode.
   useEffect(() => {
     applyTheme(theme)
@@ -208,14 +157,13 @@ export function AppProvider({
       today,
       theme,
       setTheme,
-      notifications,
       refresh,
       logout,
       toasts,
       toast,
       dismissToast,
     }),
-    [session, projects, categories, overview, today, theme, setTheme, notifications, refresh, logout, toasts, toast, dismissToast],
+    [session, projects, categories, overview, today, theme, setTheme, refresh, logout, toasts, toast, dismissToast],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

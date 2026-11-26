@@ -18,23 +18,27 @@ Chinese; it runs comfortably on a phone, a tablet or a desktop.
   streak counts the days you stayed clean, and lapses are tallied apart from
   achievements so the two never blur together.
 - **Schedules that fit real life.** Daily, chosen weekdays, weekly, monthly,
-  every N days or every N hours — as a simple tick, a measured goal (8 cups,
-  30 minutes, 5 km), or a recorded clock time.
-- **Time habits.** A time mode logs *when* something happened (bedtime, wake-up,
-  last meal) with an optional deadline like "asleep by 23:00", then reports
-  on-time rate, on-time count, late count and your average time. Deadlines may
-  cross midnight — "by 00:30" still treats 23:40 as early.
-- **Reminders and achievements.** An optional daily reminder per habit (in-app,
-  plus opt-in browser notifications), and milestone badges for streaks,
-  completed periods, check-in counts and punctuality.
+  every N days or every N hours — as a simple tick or a measured goal (8 cups,
+  30 minutes, 5 km).
+- **Supplements, not clock fields.** Any check-in can carry a free-text note, and
+  a project can define its own prompt — "什么时候睡的？睡了多久？" — which becomes
+  the note heading in the record sheet and is stored with each record.
+- **Achievements.** Milestone badges for streaks, completed periods, check-in
+  counts, interval punctuality and fulfilled follow-ups.
 - **Pinned and photographed.** Pin a habit to the top of Today so the few that
   matter stay in reach; attach a proof photo to any check-in and browse it from
   the record history.
 - **Forgiving history.** Backfill a forgotten day, excuse a day without breaking
   a streak, undo a record. Browse years of history in the calendar, not just the
   last few weeks.
-- **Prerequisites.** Require one habit before another (same day, chainable);
-  jumping ahead is flagged and clears itself when you catch up.
+- **One-click reset.** From 我的 → 危险操作, re-enter the administrator password
+  to delete the SQLite file and start over; demo data is restored when demo
+  seeding is enabled.
+- **Same-day links.** Require a habit before another (前置) or commit to one
+  after it (后置) — "if I run today, I must sleep on time." Links are chainable
+  and cycle-free; checking ahead of a prerequisite records an order violation,
+  while a follow-up left undone records an unfulfilled commitment. Both clear
+  when the missing day is backfilled.
 - **Statistics that mean something.** Streaks, completion and clean rates, a
   stamp calendar, trends, activity heatmap, category breakdown and a leaderboard.
 - **Yours alone.** The whole app sits behind one admin login. No anonymous

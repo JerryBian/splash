@@ -20,6 +20,8 @@ type statsResponse struct {
 	Periods []store.PeriodBar `json:"periods"`
 	Recent  []checkin         `json:"recent"`
 	Skips   []skip            `json:"skips"`
+	// BrokenCommitments is derived postrequisite history on closed days.
+	BrokenCommitments []store.BrokenCommitment `json:"brokenCommitments"`
 }
 
 // handleProjectStats serves GET /api/v1/projects/{id}/stats.
@@ -57,13 +59,14 @@ func (a *API) handleProjectStats(w http.ResponseWriter, r *http.Request) {
 		skips[i] = toSkip(s)
 	}
 	a.write(w, r, http.StatusOK, statsResponse{
-		Project: toProject(p, &stats.Summary),
-		Summary: stats.Summary,
-		Totals:  stats.Totals,
-		Heatmap: stats.Heatmap,
-		Periods: stats.Periods,
-		Recent:  recent,
-		Skips:   skips,
+		Project:           toProject(p, &stats.Summary),
+		Summary:           stats.Summary,
+		Totals:            stats.Totals,
+		Heatmap:           stats.Heatmap,
+		Periods:           stats.Periods,
+		Recent:            recent,
+		Skips:             skips,
+		BrokenCommitments: stats.BrokenCommitments,
 	})
 }
 

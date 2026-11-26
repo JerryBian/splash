@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -429,51 +431,6 @@ func TestDumpExportsEverything(t *testing.T) {
 	}
 }
 
-func TestTimeModeRecordsAndPunctuality(t *testing.T) {
-	db := openTestDB(t)
-	ctx := context.Background()
-	p := mustProject(t, db, ProjectInput{
-		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeTime, TargetTime: "23:00", StartDate: "2026-11-18",
-	})
-	if p.Mode != ModeTime || p.Target != 1 || p.TargetTime != "23:00" {
-		t.Fatalf("time project = %+v", p)
-	}
-	if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: "22:40", Date: "2026-11-19"}); err != nil {
-		t.Fatalf("on-time record: %v", err)
-	}
-	if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: "23:30", Date: "2026-11-20"}); err != nil {
-		t.Fatalf("late record: %v", err)
-	}
-	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if stats.Totals.OnTimeRate != 0.5 || stats.Totals.LateCount != 1 {
-		t.Errorf("punctuality = rate %v late %d, want 0.5 / 1", stats.Totals.OnTimeRate, stats.Totals.LateCount)
-	}
-	if stats.Totals.OnTimeCount != 1 {
-		t.Errorf("onTimeCount = %d, want 1", stats.Totals.OnTimeCount)
-	}
-	if stats.Totals.AvgTime != "23:05" {
-		t.Errorf("avgTime = %q, want 23:05", stats.Totals.AvgTime)
-	}
-	// Both days recorded complete their periods (time mode completes on a record).
-	if stats.Totals.Done != 2 {
-		t.Errorf("done = %d, want 2", stats.Totals.Done)
-	}
-	// A malformed clock is a field problem.
-	if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: "25:00"}); !errors.Is(err, ErrValidation) {
-		t.Errorf("bad clock: err = %v, want ErrValidation", err)
-	}
-	// time mode cannot pair with interval_hours or a bad nature.
-	if _, err := db.Projects().Create(ctx, ProjectInput{Name: "x", Schedule: ScheduleIntervalHours, Interval: 2, Mode: ModeTime, StartDate: "2026-11-01"}); !errors.Is(err, ErrValidation) {
-		t.Errorf("time+interval_hours: err = %v, want ErrValidation", err)
-	}
-	if _, err := db.Projects().Create(ctx, ProjectInput{Name: "x", Schedule: ScheduleDaily, Mode: ModeTime, Nature: NatureBad, StartDate: "2026-11-01"}); !errors.Is(err, ErrValidation) {
-		t.Errorf("time+bad: err = %v, want ErrValidation", err)
-	}
-}
-
 func TestImportRestoresExportAdditively(t *testing.T) {
 	ctx := context.Background()
 	src := openTestDB(t)
@@ -527,61 +484,6 @@ func TestImportRejectsDanglingReferences(t *testing.T) {
 	n, _ := dst.Checkins().Aggregates(ctx, uuid.NewV7(), "", "")
 	if len(n) != 0 {
 		t.Error("a rejected import left rows behind")
-	}
-}
-
-func TestTimeModeOvernightDeadline(t *testing.T) {
-	db := openTestDB(t)
-	ctx := context.Background()
-	// "Asleep by 00:30": 23:40 is the previous evening and therefore on time;
-	// 00:40 is late. A same-day string compare would invert both verdicts.
-	p := mustProject(t, db, ProjectInput{
-		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeTime, TargetTime: "00:30", StartDate: "2026-11-18",
-	})
-	for _, in := range []CheckinInput{
-		{Value: 1, Time: "23:40", Date: "2026-11-19"},
-		{Value: 1, Time: "00:40", Date: "2026-11-20"},
-	} {
-		if _, err := db.Checkins().Create(ctx, p.ID, in); err != nil {
-			t.Fatalf("record %s: %v", in.Time, err)
-		}
-	}
-	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if stats.Totals.OnTimeCount != 1 || stats.Totals.LateCount != 1 || stats.Totals.OnTimeRate != 0.5 {
-		t.Errorf("punctuality = %d on time / %d late / rate %v, want 1 / 1 / 0.5",
-			stats.Totals.OnTimeCount, stats.Totals.LateCount, stats.Totals.OnTimeRate)
-	}
-	// 23:40 and 00:40 average around midnight, not to a same-day 12:10.
-	if stats.Totals.AvgTime != "00:10" {
-		t.Errorf("avgTime = %q, want 00:10", stats.Totals.AvgTime)
-	}
-}
-
-func TestTimeModeAverageWrapsMidnight(t *testing.T) {
-	db := openTestDB(t)
-	ctx := context.Background()
-	p := mustProject(t, db, ProjectInput{
-		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeTime, StartDate: "2026-11-18",
-	})
-	for i, clock := range []string{"23:50", "00:10"} {
-		day := AddDays("2026-11-19", i)
-		if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: clock, Date: day}); err != nil {
-			t.Fatalf("record %s: %v", clock, err)
-		}
-	}
-	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if stats.Totals.AvgTime != "00:00" {
-		t.Errorf("avgTime = %q, want 00:00 (circular mean)", stats.Totals.AvgTime)
-	}
-	// Exactly opposite clocks have no meaningful circular mean.
-	if got := circularMeanClock([]int{8 * 60, 20 * 60}); got != "" {
-		t.Errorf("circularMeanClock(opposites) = %q, want empty", got)
 	}
 }
 
@@ -686,18 +588,37 @@ func TestCheckinPhotoRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMigrateFromV4AddsPinAndPhoto(t *testing.T) {
-	// Simulate a database that ran migration 4 but not 5: strip the newer
-	// columns and stamp the old version, then let Open upgrade it. This is the
-	// path a real deployment takes, not just the fresh-database path above.
+func TestMigrateFromV4AddsPinPhotoAndLinks(t *testing.T) {
+	// Simulate a database that ran migration 4 but not 5/6: recreate the old
+	// prerequisites table, move the current link into it, strip the newer
+	// columns and stamp the old version. This is the path a real deployment
+	// takes, not just the fresh-database path above.
 	path := filepath.Join(t.TempDir(), "v4.db")
 	db, err := Open(path, nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	ctx := context.Background()
+	alpha := mustProject(t, db, ProjectInput{Name: "Alpha", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+	beta := mustProject(t, db, ProjectInput{
+		Name: "Beta", Schedule: ScheduleDaily, Mode: ModeCheck,
+		Prerequisites: []string{alpha.ID.String()}, StartDate: "2026-11-01",
+	})
 	if _, err := db.sql.Exec(`
+		CREATE TABLE prerequisites (
+			project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+			requires_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+			PRIMARY KEY (project_id, requires_id)
+		);
+		INSERT INTO prerequisites (project_id, requires_id)
+			SELECT source_id, target_id FROM project_links WHERE kind = 'requires';
+		DROP TABLE project_links;
 		ALTER TABLE projects DROP COLUMN pinned;
+		ALTER TABLE projects DROP COLUMN note_prompt;
+		ALTER TABLE projects ADD COLUMN target_time TEXT NOT NULL DEFAULT '';
+		ALTER TABLE projects ADD COLUMN reminder_time TEXT NOT NULL DEFAULT '';
 		ALTER TABLE checkins DROP COLUMN photo;
+		ALTER TABLE checkins ADD COLUMN time TEXT NOT NULL DEFAULT '';
 		PRAGMA user_version = 4;
 	`); err != nil {
 		_ = db.Close()
@@ -717,6 +638,13 @@ func TestMigrateFromV4AddsPinAndPhoto(t *testing.T) {
 	if version != schemaVersion {
 		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
 	}
+	restored, err := db2.Projects().Get(ctx, beta.ID)
+	if err != nil {
+		t.Fatalf("get migrated beta: %v", err)
+	}
+	if len(restored.Prerequisites) != 1 || restored.Prerequisites[0] != alpha.ID {
+		t.Errorf("prerequisites after migration = %v, want [%s]", restored.Prerequisites, alpha.ID)
+	}
 	const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
 	p := mustProject(t, db2, ProjectInput{
 		Name: "Upgraded", Schedule: ScheduleDaily, Mode: ModeCheck, Pinned: true, StartDate: "2026-11-01",
@@ -724,8 +652,279 @@ func TestMigrateFromV4AddsPinAndPhoto(t *testing.T) {
 	if !p.Pinned {
 		t.Error("pinned did not survive the upgrade")
 	}
-	c, err := db2.Checkins().Create(context.Background(), p.ID, CheckinInput{Value: 1, Photo: png})
+	c, err := db2.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Photo: png})
 	if err != nil || !c.HasPhoto {
 		t.Errorf("photo checkin after upgrade = %+v, err = %v", c, err)
+	}
+}
+
+func TestImportRestoresPostrequisites(t *testing.T) {
+	ctx := context.Background()
+	src := openTestDB(t)
+	alpha := mustProject(t, src, ProjectInput{Name: "Alpha", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+	beta := mustProject(t, src, ProjectInput{Name: "Beta", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+	gamma, err := src.Projects().Update(ctx, mustProject(t, src, ProjectInput{
+		Name: "Gamma", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01",
+	}).ID, ProjectPatch{
+		Prerequisites:  &[]string{alpha.ID.String()},
+		Postrequisites: &[]string{beta.ID.String()},
+	}, nil)
+	if err != nil {
+		t.Fatalf("wire gamma: %v", err)
+	}
+	// A link may point forward to a project created later in the backup.
+	if _, err := src.Projects().Update(ctx, alpha.ID, ProjectPatch{Postrequisites: &[]string{beta.ID.String()}}, nil); err != nil {
+		t.Fatalf("wire forward postrequisite: %v", err)
+	}
+	dump, err := src.Dump(ctx)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	dst := openTestDB(t)
+	if _, err := dst.Import(ctx, dump); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	got, err := dst.Projects().Get(ctx, gamma.ID)
+	if err != nil {
+		t.Fatalf("get gamma: %v", err)
+	}
+	if len(got.Prerequisites) != 1 || got.Prerequisites[0] != alpha.ID {
+		t.Errorf("imported prerequisites = %v", got.Prerequisites)
+	}
+	if len(got.Postrequisites) != 1 || got.Postrequisites[0] != beta.ID {
+		t.Errorf("imported postrequisites = %v", got.Postrequisites)
+	}
+	gotAlpha, err := dst.Projects().Get(ctx, alpha.ID)
+	if err != nil {
+		t.Fatalf("get alpha: %v", err)
+	}
+	if len(gotAlpha.Postrequisites) != 1 || gotAlpha.Postrequisites[0] != beta.ID {
+		t.Errorf("forward postrequisite not restored: %v", gotAlpha.Postrequisites)
+	}
+
+	bad := ExportData{Projects: []Project{{
+		ID: uuid.NewV7(), Name: "Dangling", Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次",
+		Nature: NatureGood, Color: "blue", Icon: "✅", StartDate: "2026-11-01", Version: 1,
+		Postrequisites: []uuid.UUID{uuid.NewV7()},
+	}}}
+	if _, err := dst.Import(ctx, bad); !errors.Is(err, ErrValidation) {
+		t.Errorf("dangling postrequisite: err = %v, want ErrValidation", err)
+	}
+}
+
+func TestImportRejectsLinkCycles(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	base := func(id uuid.UUID, name string) Project {
+		return Project{
+			ID: id, Name: name, Icon: "✅", Color: "blue", Nature: NatureGood,
+			Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次",
+			StartDate: "2026-11-01", Version: 1,
+		}
+	}
+	a, b := uuid.NewV7(), uuid.NewV7()
+	pa, pb := base(a, "A"), base(b, "B")
+	pa.Prerequisites = []uuid.UUID{b}
+	pb.Postrequisites = []uuid.UUID{a} // combined graph: b -> a -> b
+	if _, err := db.Import(ctx, ExportData{Projects: []Project{pa, pb}}); !errors.Is(err, ErrValidation) {
+		t.Errorf("cyclic import: err = %v, want ErrValidation", err)
+	}
+}
+
+func TestMigrateV7ConvertsTimeModeToNotes(t *testing.T) {
+	// Simulate the v6 schema: re-add the retired time/reminder columns and drop
+	// the new note prompt, then let Open run migration 7.
+	path := filepath.Join(t.TempDir(), "v6.db")
+	db, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ctx := context.Background()
+	p := mustProject(t, db, ProjectInput{Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+	c, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Date: "2026-11-20"})
+	if err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	if _, err := db.sql.Exec(`
+		ALTER TABLE projects ADD COLUMN target_time TEXT NOT NULL DEFAULT '';
+		ALTER TABLE projects ADD COLUMN reminder_time TEXT NOT NULL DEFAULT '';
+		ALTER TABLE checkins ADD COLUMN time TEXT NOT NULL DEFAULT '';
+		ALTER TABLE projects DROP COLUMN note_prompt;
+	`); err != nil {
+		_ = db.Close()
+		t.Fatalf("shape v6 columns: %v", err)
+	}
+	if _, err := db.sql.ExecContext(ctx,
+		`UPDATE projects SET mode = 'time', target_time = '23:00', reminder_time = '22:30' WHERE id = ?`,
+		p.ID.String()); err != nil {
+		_ = db.Close()
+		t.Fatalf("shape v6 project: %v", err)
+	}
+	if _, err := db.sql.ExecContext(ctx, `UPDATE checkins SET time = '22:40' WHERE id = ?`, c.ID.String()); err != nil {
+		_ = db.Close()
+		t.Fatalf("shape v6 checkin: %v", err)
+	}
+	if _, err := db.sql.Exec(`PRAGMA user_version = 6`); err != nil {
+		_ = db.Close()
+		t.Fatalf("stamp v6: %v", err)
+	}
+	_ = db.Close()
+
+	db2, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("reopen at v6: %v", err)
+	}
+	defer func() { _ = db2.Close() }()
+	got, err := db2.Projects().Get(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("get project: %v", err)
+	}
+	if got.Mode != ModeCheck {
+		t.Errorf("mode = %q, want check", got.Mode)
+	}
+	if got.NotePrompt != "原准时目标 23:00" {
+		t.Errorf("notePrompt = %q", got.NotePrompt)
+	}
+	gotCheckin, err := db2.Checkins().Get(ctx, c.ID)
+	if err != nil {
+		t.Fatalf("get checkin: %v", err)
+	}
+	if gotCheckin.Note != "22:40" {
+		t.Errorf("migrated note = %q, want 22:40", gotCheckin.Note)
+	}
+	// The retired columns are gone.
+	for _, table := range []string{"projects", "checkins"} {
+		rows, err := db2.sql.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatalf("table_info %s: %v", table, err)
+		}
+		for rows.Next() {
+			var cid int
+			var name, typ string
+			var notnull, pk int
+			var dflt any
+			if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+				t.Fatalf("scan table_info: %v", err)
+			}
+			if name == "target_time" || name == "reminder_time" || name == "time" {
+				t.Errorf("%s still has retired column %s", table, name)
+			}
+		}
+		_ = rows.Close()
+	}
+}
+
+func TestNotePromptRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	p := mustProject(t, db, ProjectInput{
+		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeCheck,
+		NotePrompt: "什么时候睡的？睡了多久？", StartDate: "2026-11-01",
+	})
+	if p.NotePrompt != "什么时候睡的？睡了多久？" {
+		t.Fatalf("created notePrompt = %q", p.NotePrompt)
+	}
+	got, err := db.Projects().Get(ctx, p.ID)
+	if err != nil || got.NotePrompt != p.NotePrompt {
+		t.Fatalf("get notePrompt = %q, err = %v", got.NotePrompt, err)
+	}
+	next := "睡了多久？"
+	updated, err := db.Projects().Update(ctx, p.ID, ProjectPatch{NotePrompt: &next}, nil)
+	if err != nil || updated.NotePrompt != next {
+		t.Fatalf("update notePrompt = %q, err = %v", updated.NotePrompt, err)
+	}
+	empty := ""
+	cleared, err := db.Projects().Update(ctx, p.ID, ProjectPatch{NotePrompt: &empty}, &updated.Version)
+	if err != nil || cleared.NotePrompt != "" {
+		t.Fatalf("clear notePrompt = %q, err = %v", cleared.NotePrompt, err)
+	}
+	// The backup carries the per-project prompt.
+	if _, err := db.Projects().Update(ctx, p.ID, ProjectPatch{NotePrompt: &next}, &cleared.Version); err != nil {
+		t.Fatalf("restore prompt: %v", err)
+	}
+	dump, err := db.Dump(ctx)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	dst := openTestDB(t)
+	if _, err := dst.Import(ctx, dump); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	restored, err := dst.Projects().Get(ctx, p.ID)
+	if err != nil || restored.NotePrompt != next {
+		t.Errorf("restored notePrompt = %q, err = %v", restored.NotePrompt, err)
+	}
+}
+
+func TestResetDeletesAndRecreatesDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reset.db")
+	db, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	ctx := context.Background()
+	mustProject(t, db, ProjectInput{Name: "DeleteMe", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+	if _, err := db.sql.ExecContext(ctx, `INSERT INTO categories (id, name, icon, color, created_at) VALUES ('c1', 'Secret', '🔒', 'slate', 0)`); err != nil {
+		t.Fatalf("insert category: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stat before reset: %v", err)
+	}
+
+	seeded, err := db.Reset(ctx, false)
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if seeded != 0 {
+		t.Errorf("seeded = %d, want 0", seeded)
+	}
+	projects, err := db.Projects().List(ctx, ProjectQuery{})
+	if err != nil || len(projects) != 0 {
+		t.Fatalf("projects after reset = %d, err = %v", len(projects), err)
+	}
+	categories, err := db.Categories().List(ctx)
+	if err != nil || len(categories) != 0 {
+		t.Fatalf("categories after reset = %d, err = %v", len(categories), err)
+	}
+	var version int
+	if err := db.sql.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("version after reset = %d, err = %v", version, err)
+	}
+	// The old bytes must be gone from the new file, not merely hidden by a query.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read reset db: %v", err)
+	}
+	if strings.Contains(string(raw), "DeleteMe") || strings.Contains(string(raw), "Secret") {
+		t.Error("reset database still contains old project/category bytes")
+	}
+	// The reopened database is writable.
+	mustProject(t, db, ProjectInput{Name: "Fresh", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+}
+
+func TestResetWithSeedRestoresDemo(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	mustProject(t, db, ProjectInput{Name: "Old", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+	seeded, err := db.Reset(ctx, true)
+	if err != nil {
+		t.Fatalf("reset seeded: %v", err)
+	}
+	if seeded == 0 {
+		t.Fatal("reset with seed inserted nothing")
+	}
+	projects, err := db.Projects().List(ctx, ProjectQuery{})
+	if err != nil || len(projects) != seeded {
+		t.Fatalf("projects after seeded reset = %d, err = %v, want %d", len(projects), err, seeded)
+	}
+	var sleep Project
+	for _, p := range projects {
+		if p.Name == "准时睡觉" {
+			sleep = p
+		}
+	}
+	if sleep.NotePrompt == "" {
+		t.Error("seeded sleep project has no notePrompt")
 	}
 }

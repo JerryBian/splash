@@ -89,6 +89,8 @@ export function ConfirmDialog({
   confirmLabel = '确认',
   danger = false,
   pending = false,
+  confirmDisabled = false,
+  children,
   onConfirm,
   onClose,
 }: {
@@ -98,6 +100,9 @@ export function ConfirmDialog({
   confirmLabel?: string
   danger?: boolean
   pending?: boolean
+  confirmDisabled?: boolean
+  /** Extra controls between the message and the buttons, e.g. a password field. */
+  children?: ReactNode
   onConfirm: () => void
   onClose: () => void
 }) {
@@ -117,11 +122,17 @@ export function ConfirmDialog({
       <div className="dialog" role="alertdialog" aria-modal="true" aria-label={title}>
         <h2 className="dialog-title">{title}</h2>
         <p className="dialog-message">{message}</p>
+        {children}
         <div className="dialog-actions">
           <Button variant="ghost" onClick={onClose}>
             取消
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} pending={pending} onClick={onConfirm}>
+          <Button
+            variant={danger ? 'danger' : 'primary'}
+            pending={pending}
+            disabled={confirmDisabled}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </Button>
         </div>

@@ -18,16 +18,17 @@ const STREAK_MILESTONES = [7, 30, 100, 365]
 const COUNT_MILESTONES = [10, 50, 100, 500]
 const PERIOD_MILESTONES = [10, 50, 100]
 const ONTIME_MILESTONES = [10, 30, 100]
+const LINK_MILESTONES = [10, 30, 100]
 
 /**
  * Builds the badge shelf for one project.
  *
  * The families are deliberately different because the underlying numbers mean
  * different things: a bad habit never earns a "打卡" badge (its check-ins are
- * lapses), so it is rewarded for periods kept clean instead; a time-mode habit
- * with a deadline earns punctuality badges, which a plain check habit has no
- * way to measure. Reusing a count milestone across nature is exactly the kind
- * of design that would make a lapse look like progress.
+ * lapses), so it is rewarded for periods kept clean instead; a project with an
+ * interval earns punctuality badges, which a plain check habit cannot measure.
+ * Reusing a count milestone across nature is exactly the kind of design that
+ * would make a lapse look like progress.
  */
 export function achievements(project: Project, totals: Totals, summary: ProjectStatus): Achievement[] {
   const out: Achievement[] = []
@@ -68,11 +69,9 @@ export function achievements(project: Project, totals: Totals, summary: ProjectS
     }
   }
 
-  // Punctuality only exists when there is a deadline (time mode) or a rolling
-  // interval that can be missed.
-  const timed = project.mode === 'time' ? project.targetTime !== '' : project.schedule === 'interval_hours'
-  if (timed) {
-    const word = project.mode === 'time' ? '准时' : '按时'
+  // Punctuality exists only for a rolling interval that can be missed.
+  if (project.schedule === 'interval_hours') {
+    const word = '按时'
     for (const m of ONTIME_MILESTONES) {
       out.push({
         id: `ontime-${m}`,
@@ -80,6 +79,22 @@ export function achievements(project: Project, totals: Totals, summary: ProjectS
         icon: m >= 100 ? '🏅' : m >= 30 ? '🎯' : '⏰',
         earned: totals.onTimeCount >= m,
         progress: Math.min(1, totals.onTimeCount / m),
+      })
+    }
+  }
+
+  // Same-day postrequisite commitments: a fulfilled link-day is one completion
+  // day where every follow-up was resolved. Only a project that has follow-ups
+  // can earn these.
+  if (project.postrequisites.length > 0 && totals.postReqs > 0) {
+    const fulfilled = Math.max(0, totals.postReqs - totals.postViolations)
+    for (const m of LINK_MILESTONES) {
+      out.push({
+        id: `link-${m}`,
+        label: `兑现连带 ${m} 次`,
+        icon: m >= 100 ? '💠' : '🔗',
+        earned: fulfilled >= m,
+        progress: Math.min(1, fulfilled / m),
       })
     }
   }

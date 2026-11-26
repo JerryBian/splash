@@ -17,12 +17,14 @@ function makeStats(project = makeProject()): ProjectStats {
     summary: makeStatus(),
     totals: {
       checkins: 0, value: 0, activeDays: 0, done: 0, missed: 0, skipped: 0,
-      completionRate: 0, onTimeRate: 0, onTimeCount: 0, lateCount: 0, avgTime: '', backfilled: 0, violations: 0,
+      completionRate: 0, onTimeRate: 0, onTimeCount: 0, lateCount: 0, backfilled: 0, violations: 0,
+      postReqs: 0, postViolations: 0, commitmentRate: 0,
     },
     heatmap: [],
     periods: [],
     recent: [],
     skips: [],
+    brokenCommitments: [],
   }
 }
 
@@ -54,47 +56,8 @@ describe('ProjectDetail history', () => {
     expect(screen.getByText('2025 年')).toBeInTheDocument()
   })
 
-  it('shows punctuality, the average time and a late badge for a time habit', async () => {
-    const timeProject = makeProject({ id: 'p-t', name: '准时睡觉', mode: 'time', targetTime: '23:00' })
-    const stats = makeStats(timeProject)
-    stats.summary = makeStatus({ status: 'done', value: 1, target: 1 })
-    stats.totals = { ...stats.totals, checkins: 2, done: 2, onTimeRate: 0.5, onTimeCount: 1, lateCount: 1, avgTime: '23:05' }
-    stats.recent = [
-      {
-        id: 'c-late', projectId: 'p-t', value: 1, time: '23:30', hasPhoto: true,
-        localDate: '2026-11-20', checkedAt: '2026-11-20T15:30:00Z', tzOffset: 480,
-        backfilled: false, violated: false, unmet: [], createdAt: '',
-      },
-      {
-        id: 'c-ok', projectId: 'p-t', value: 1, time: '22:40', hasPhoto: false,
-        localDate: '2026-11-19', checkedAt: '2026-11-19T14:40:00Z', tzOffset: 480,
-        backfilled: false, violated: false, unmet: [], createdAt: '',
-      },
-    ]
-    stubFetch({
-      '/api/v1/projects/p-t/stats': stats,
-      '/api/v1/projects/p-t/checkins': { checkins: [] },
-      '/api/v1/projects/p-t/skips': { skips: [] },
-    })
-    await act(async () => {
-      render(
-        <AppProvider initial={makeBootstrap({ projects: [timeProject] })}>
-          <ProjectDetail projectId="p-t" />
-        </AppProvider>,
-      )
-    })
-
-    expect(screen.getByText('准时率')).toBeInTheDocument()
-    expect(screen.getByText('50%')).toBeInTheDocument()
-    expect(screen.getByText('平均时间')).toBeInTheDocument()
-    expect(screen.getByText('23:05')).toBeInTheDocument()
-    // The history shows the recorded clock, not the checked_at instant.
-    expect(screen.getByText('23:30')).toBeInTheDocument()
-    expect(screen.getByText('迟到')).toBeInTheDocument()
-    expect(screen.getByAltText('打卡照片')).toBeInTheDocument()
-  })
-
-  it('loads older records on demand', async () => {    const recent = Array.from({ length: 30 }, (_, i) => ({
+  it('loads older records on demand', async () => {
+    const recent = Array.from({ length: 30 }, (_, i) => ({
       id: `c${i}`,
       projectId: 'p-1',
       value: 1,
@@ -105,6 +68,8 @@ describe('ProjectDetail history', () => {
       violated: false,
       hasPhoto: false,
       unmet: [],
+      postUnmet: [],
+      postPending: [],
       createdAt: '',
     }))
     const stats = makeStats(oldProject)
@@ -130,5 +95,42 @@ describe('ProjectDetail history', () => {
       )
       expect(call).toBeDefined()
     })
+  })
+
+  it('shows postrequisite state, fulfilment rate and broken commitments', async () => {
+    const sleep = makeProject({ id: 'p-sleep', name: '准时睡觉', icon: '😴' })
+    const run = makeProject({ id: 'p-run', name: '跑步', postrequisites: ['p-sleep'] })
+    const stats = makeStats(run)
+    stats.summary = makeStatus({ status: 'done', value: 1, target: 1, pendingPosts: ['p-sleep'] })
+    stats.totals = { ...stats.totals, postReqs: 2, postViolations: 1, commitmentRate: 0.5 }
+    stats.recent = [
+      {
+        id: 'c1', projectId: 'p-run', value: 1, localDate: TEST_TODAY, checkedAt: '', tzOffset: 0,
+        backfilled: false, violated: false, hasPhoto: false, unmet: [], postUnmet: [], postPending: ['p-sleep'],
+        createdAt: '',
+      },
+    ]
+    stats.brokenCommitments = [{ date: '2026-11-20', targetId: 'p-sleep' }]
+    stubFetch({
+      '/api/v1/projects/p-run/stats': stats,
+      '/api/v1/projects/p-run/checkins': { checkins: [] },
+      '/api/v1/projects/p-run/skips': { skips: [] },
+    })
+    await act(async () => {
+      render(
+        <AppProvider initial={makeBootstrap({ projects: [run, sleep] })}>
+          <ProjectDetail projectId="p-run" />
+        </AppProvider>,
+      )
+    })
+
+    expect(screen.getByText('关联项目')).toBeInTheDocument()
+    expect(screen.getByText('后置 · 我完成后这些也要完成')).toBeInTheDocument()
+    expect(screen.getByText('今日待兑现')).toBeInTheDocument()
+    expect(screen.getByText(/连带兑现 1\/2/)).toBeInTheDocument()
+    expect(screen.getByText('连带未兑现')).toBeInTheDocument()
+    expect(screen.getByText('未兑现：准时睡觉')).toBeInTheDocument()
+    expect(screen.getAllByText(/准时睡觉/).length).toBeGreaterThan(0)
+    expect(screen.getByText('待兑现')).toBeInTheDocument()
   })
 })

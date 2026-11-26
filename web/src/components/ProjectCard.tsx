@@ -4,8 +4,8 @@ import { useNow } from '../hooks/useNow'
 import { inkColorOf, splatter } from '../lib/confetti'
 import { formatCountdown } from '../lib/date'
 import { progressLabel, scheduleLabel } from '../lib/format'
-import { isBad, isComplete, isTime } from '../lib/schedule'
-import { CheckIcon, ClockIcon, LockIcon, PinIcon, PlusIcon, XIcon } from './icons'
+import { isBad, isComplete } from '../lib/schedule'
+import { CheckIcon, LinkIcon, LockIcon, PinIcon, PlusIcon, XIcon } from './icons'
 import { NatureBadge } from './ui'
 
 /**
@@ -95,15 +95,20 @@ export function ProjectCard({
                 🔥{status.streak}
               </span>
             ) : null}
-            {project.reminderTime ? (
-              <span className="card-reminder" title={`每日 ${project.reminderTime} 提醒`}>
-                <ClockIcon size={11} /> {project.reminderTime}
-              </span>
-            ) : null}
           </span>
           {status !== undefined && status.unmet.length > 0 ? (
             <span className="card-gate" title="前置项目今天还没完成">
               <LockIcon size={11} /> 需先完成 {status.unmet.length} 个前置
+            </span>
+          ) : null}
+          {status !== undefined && status.pendingPosts.length > 0 ? (
+            <span className="card-link" data-kind="pending" title="完成后当天还需兑现这些后置项目">
+              <LinkIcon size={11} /> 待兑现 {status.pendingPosts.length} 个后置
+            </span>
+          ) : null}
+          {status !== undefined && status.brokenPosts.length > 0 ? (
+            <span className="card-link" data-kind="broken" title="后置项目没有在同一天完成">
+              <LinkIcon size={11} /> 未兑现 {status.brokenPosts.length} 个后置
             </span>
           ) : null}
           {isInterval ? (
@@ -117,7 +122,7 @@ export function ProjectCard({
             </span>
           ) : (
             <span className="card-progress">
-              {bad || isTime(project) ? null : (
+              {bad ? null : (
                 <span className="bar">
                   <span className="bar-fill" style={barStyle} />
                 </span>

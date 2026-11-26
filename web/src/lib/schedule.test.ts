@@ -2,14 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { makeProject, makeStatus } from '../test/fixtures'
 import {
   activityLevel,
-  clockMinutes,
   dailyEquivalentTarget,
   heatLevel,
   isBad,
   isCheckable,
   isComplete,
-  isLate,
   needsValueSheet,
+  postState,
   STATUS_LABEL,
   statusLabel,
 } from './schedule'
@@ -104,27 +103,15 @@ describe('needsValueSheet', () => {
   })
 })
 
-describe('clock punctuality', () => {
-  it('parses valid and rejects malformed clocks', () => {
-    expect(clockMinutes('00:00')).toBe(0)
-    expect(clockMinutes('23:59')).toBe(1439)
-    expect(clockMinutes('9:00')).toBeNull()
-    expect(clockMinutes('24:00')).toBeNull()
-    expect(clockMinutes('')).toBeNull()
-  })
-  it('mirrors the server circular deadline rule', () => {
-    const bedtime = makeProject({ mode: 'time', targetTime: '23:00' })
-    expect(isLate(bedtime, { time: '22:40' })).toBe(false)
-    expect(isLate(bedtime, { time: '23:00' })).toBe(false)
-    expect(isLate(bedtime, { time: '00:10' })).toBe(true)
-    expect(isLate(bedtime, {})).toBe(false)
-
-    // An after-midnight deadline: the previous evening is still early.
-    const lateNight = makeProject({ mode: 'time', targetTime: '00:30' })
-    expect(isLate(lateNight, { time: '23:40' })).toBe(false)
-    expect(isLate(lateNight, { time: '00:40' })).toBe(true)
-    // No deadline or no time mode means no verdict.
-    expect(isLate(makeProject({ mode: 'time' }), { time: '23:40' })).toBe(false)
-    expect(isLate(makeProject({ mode: 'check', targetTime: '23:00' }), { time: '23:40' })).toBe(false)
+describe('postState', () => {
+  it('reads pending, broken, resolved and waiting from the summary', () => {
+    const source = makeProject({ postrequisites: ['p-2'] })
+    expect(postState(source, makeStatus({ pendingPosts: ['p-2'] }), 'p-2')).toBe('pending')
+    expect(postState(source, makeStatus({ brokenPosts: ['p-2'] }), 'p-2')).toBe('broken')
+    expect(postState(source, makeStatus({ status: 'done', value: 1, target: 1 }), 'p-2')).toBe('resolved')
+    expect(postState(source, makeStatus({ value: 0, target: 1 }), 'p-2')).toBe('waiting')
+    const interval = makeProject({ schedule: 'interval_hours', interval: 2 })
+    expect(postState(interval, makeStatus({ count: 1, target: 0 }), 'p-2')).toBe('resolved')
+    expect(postState(interval, makeStatus({ count: 0, target: 0 }), 'p-2')).toBe('waiting')
   })
 })

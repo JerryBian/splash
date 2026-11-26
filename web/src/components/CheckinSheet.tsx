@@ -9,7 +9,7 @@ import { formatClock } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatValue, progressLabel } from '../lib/format'
 import { readPhotoFile } from '../lib/photo'
-import { isBad, isLate, isTime } from '../lib/schedule'
+import { isBad } from '../lib/schedule'
 import { CameraIcon, CheckIcon, MinusIcon, PlusIcon, SkipIcon, TrashIcon } from './icons'
 import { ConfirmDialog, Sheet } from './overlays'
 import { PhotoThumb } from './PhotoThumb'
@@ -34,7 +34,7 @@ export function CheckinSheet({
   initialDate: string
   onClose: () => void
 }) {
-  const { today, refresh, toast } = useApp()
+  const { today, projects, refresh, toast } = useApp()
   const [date, setDate] = useState(initialDate)
   const [value, setValue] = useState('1')
   const [note, setNote] = useState('')
@@ -50,18 +50,9 @@ export function CheckinSheet({
 
   const isInterval = project.schedule === 'interval_hours'
   const isCheck = project.mode === 'check'
-  const isTimeMode = isTime(project)
   const bad = isBad(project)
   const status = project.status
   const [confirmGate, setConfirmGate] = useState(false)
-  // A time-mode record defaults to "now" for today. A backfill defaults to the
-  // punctuality deadline instead: the moment the sheet was opened has nothing
-  // to do with when the habit happened yesterday.
-  const [time, setTime] = useState(() =>
-    initialDate === today
-      ? new Date().toTimeString().slice(0, 5)
-      : project.targetTime || new Date().toTimeString().slice(0, 5),
-  )
 
   const reloadDay = () => {
     invalidate(`day:${project.id}:`)
@@ -71,10 +62,8 @@ export function CheckinSheet({
   const numericValue = Number(value)
   const valueValid = Number.isFinite(numericValue) && numericValue > 0
   const gateUnmet = date === today && status !== undefined && status.unmet.length > 0
-  const late = isTimeMode && isLate(project, { time })
-  // A time record needs a clock; every other mode is satisfied by a tick or a
-  // positive quantity.
-  const canSubmit = isInterval || isCheck || (isTimeMode ? time !== '' : valueValid)
+  const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? id
+  const canSubmit = isInterval || isCheck || valueValid
 
   const onPhotoPicked = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -103,19 +92,14 @@ export function CheckinSheet({
     setBusy(true)
     try {
       const created = await api.createCheckin(project.id, {
-        value: isInterval || isCheck || isTimeMode ? 1 : numericValue,
+        value: isInterval || isCheck ? 1 : numericValue,
         note: note.trim(),
         mood,
-        time: isTimeMode ? time : undefined,
         photo: photo === '' ? undefined : photo,
         date,
         tzOffset: -new Date().getTimezoneOffset(),
       })
-      const recorded = bad
-        ? `已记录「${project.name}」破戒`
-        : isTimeMode
-          ? `已记录「${project.name}」 ${time}`
-          : `已为「${project.name}」打卡`
+      const recorded = bad ? `已记录「${project.name}」破戒` : `已为「${project.name}」打卡`
       toast(
         created.violated ? `${recorded}，但记了一次前置违规` : recorded,
         created.violated ? 'error' : bad ? 'info' : 'ok',
@@ -158,13 +142,9 @@ export function CheckinSheet({
           <CheckIcon size={16} strokeWidth={2.4} />
           {bad
             ? '记录破戒'
-            : isTimeMode
-              ? time === ''
-                ? '选择时间'
-                : `记录 ${time}`
-              : isInterval || isCheck
-                ? '打卡'
-                : `记录 ${valueValid ? formatValue(numericValue) : '—'} ${project.unit}`}
+            : isInterval || isCheck
+              ? '打卡'
+              : `记录 ${valueValid ? formatValue(numericValue) : '—'} ${project.unit}`}
         </Button>
       }
     >
@@ -186,18 +166,6 @@ export function CheckinSheet({
           <p className="sheet-note">打勾型项目：每天打一次勾即完成，无需填数量。</p>
         ) : isInterval ? (
           <p className="sheet-note">间隔项目每次记 1 次，打卡后重新开始倒计时。</p>
-        ) : isTimeMode ? (
-          <Field
-            label="时间"
-            htmlFor="checkin-time"
-            hint={
-              project.targetTime
-                ? `准时目标 ${project.targetTime} · ${time === '' ? '请选择时间' : late ? '这次会记为迟到' : '这次准时'}`
-                : '记录这件事发生的时刻'
-            }
-          >
-            <Input id="checkin-time" type="time" value={time} onChange={(event) => setTime(event.target.value)} />
-          </Field>
         ) : (
           <Field label={`数量（${project.unit}）`} htmlFor="checkin-value">
             <div className="stepper">
@@ -241,12 +209,22 @@ export function CheckinSheet({
           </Field>
         )}
 
-        <Field label="备注（可选）" htmlFor="checkin-note">
+        {!bad && project.postrequisites.length > 0 ? (
+          <p className="sheet-note link-hint">
+            完成后当天需兑现：{project.postrequisites.map(nameOf).join('、')}
+          </p>
+        ) : null}
+
+        <Field
+          label={project.notePrompt || '补充说明（可选）'}
+          htmlFor="checkin-note"
+          hint="记录时间、时长或感受，会保存在这条记录里"
+        >
           <Input
             id="checkin-note"
             value={note}
             maxLength={200}
-            placeholder="此刻的想法…"
+            placeholder={project.notePrompt ? '按提示补充…' : '此刻的想法…'}
             onChange={(event) => setNote(event.target.value)}
           />
         </Field>
@@ -338,9 +316,10 @@ function DayRecords({
   version: number
   onChanged: () => Promise<void>
 }) {
-  const { toast } = useApp()
+  const { projects, toast } = useApp()
   const result = useLoaded(`day:${project.id}:${day}:${version}`, () => fetchDay(project.id, day))
   const [busy, setBusy] = useState(false)
+  const nameOf = (id: string) => projects.find((p) => p.id === id)?.name ?? id
 
   if (!result.ok) {
     return <p className="field-error">{describeError(result.error)}</p>
@@ -395,18 +374,22 @@ function DayRecords({
           {records.map((record) => (
             <li key={record.id} className="record">
               <span className="record-value">
-                {isTime(project)
-                  ? record.time !== undefined && record.time !== ''
-                    ? record.time
-                    : formatClock(record.checkedAt)
-                  : `${formatValue(record.value)} ${project.unit}`}
+                {formatValue(record.value)} {project.unit}
               </span>
               <span className="record-meta">
-                {isTime(project) ? null : formatClock(record.checkedAt)}
+                {formatClock(record.checkedAt)}
                 {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                 {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
               </span>
-              {isLate(project, record) ? <span className="rec-badge" data-kind="late">迟到</span> : null}
+              {record.postUnmet.length > 0 ? (
+                <span className="rec-badge" data-kind="post" title={`未兑现：${record.postUnmet.map(nameOf).join('、')}`}>
+                  未兑现</span>
+              ) : null}
+              {record.postPending.length > 0 ? (
+                <span className="rec-badge" data-kind="post-pending" title={`待兑现：${record.postPending.map(nameOf).join('、')}`}>
+                  待兑现
+                </span>
+              ) : null}
               {record.hasPhoto ? <PhotoThumb checkinId={record.id} /> : null}
               <RecordBadges backfilled={record.backfilled} violated={record.violated} />
               <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>

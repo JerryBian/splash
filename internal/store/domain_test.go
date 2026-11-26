@@ -25,6 +25,8 @@ func TestProjectInputValidation(t *testing.T) {
 		{"zero target", func(in *ProjectInput) { in.Target = 0 }, "target"},
 		{"negative target", func(in *ProjectInput) { in.Target = -1 }, "target"},
 		{"long unit", func(in *ProjectInput) { in.Unit = strings.Repeat("u", MaxUnitLength+1) }, "unit"},
+		{"long note prompt", func(in *ProjectInput) { in.NotePrompt = strings.Repeat("字", MaxNotePromptLength+1) }, "notePrompt"},
+		{"note prompt valid", func(in *ProjectInput) { in.NotePrompt = "什么时候睡的？睡了多久？" }, ""},
 		{"weekdays without days", func(in *ProjectInput) { in.Schedule = ScheduleWeekdays; in.Weekdays = nil }, "weekdays"},
 		{"weekdays out of range", func(in *ProjectInput) { in.Schedule = ScheduleWeekdays; in.Weekdays = []int{0, 8} }, "weekdays"},
 		{"weekdays valid", func(in *ProjectInput) { in.Schedule = ScheduleWeekdays; in.Weekdays = []int{1, 3, 5} }, ""},
@@ -255,37 +257,6 @@ func TestNatureValidationAndNormalization(t *testing.T) {
 	patch := ProjectPatch{Nature: new(NatureBad)}
 	if err := patch.Validate(current, "2026-11-21"); err == nil {
 		t.Error("patch to bad on interval_hours accepted")
-	}
-}
-
-func TestLateForDeadline(t *testing.T) {
-	tests := []struct {
-		name     string
-		deadline string
-		clock    string
-		want     bool
-	}{
-		{"early same day", "23:00", "22:40", false},
-		{"exactly at the deadline", "23:00", "23:00", false},
-		{"one minute late", "23:00", "23:01", true},
-		{"after midnight for a bedtime deadline", "23:00", "00:10", true},
-		{"evening before an after-midnight deadline", "00:30", "23:40", false},
-		{"before an after-midnight deadline", "00:30", "00:20", false},
-		{"after an after-midnight deadline", "00:30", "00:40", true},
-		{"morning habit early", "08:00", "07:59", false},
-		{"morning habit late", "08:00", "08:01", true},
-		{"half a day after is late", "08:00", "20:00", true},
-		{"more than half a day after reads as next day", "08:00", "20:01", false},
-		{"empty deadline", "", "09:00", false},
-		{"empty clock", "09:00", "", false},
-		{"malformed clock", "09:00", "9:0", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := LateForDeadline(tt.deadline, tt.clock); got != tt.want {
-				t.Errorf("LateForDeadline(%q, %q) = %v, want %v", tt.deadline, tt.clock, got, tt.want)
-			}
-		})
 	}
 }
 

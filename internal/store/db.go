@@ -29,7 +29,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 5
+const schemaVersion = 7
 
 // migration2 adds the completion mode, the backfill marker and the
 // prerequisite graph. Existing single-tick projects (target <= 1) become
@@ -72,6 +72,42 @@ ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE checkins ADD COLUMN photo TEXT NOT NULL DEFAULT '';
 `
 
+// migration6 unifies the same-day dependency graph into project_links: the old
+// prerequisites table becomes 'requires' edges, and postrequisites are
+// 'implies' edges in the same table. One graph means one cycle rule, one
+// loader, and one place to keep both directions consistent.
+const migration6SQL = `
+CREATE TABLE IF NOT EXISTS project_links (
+    source_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    target_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    kind      TEXT NOT NULL CHECK (kind IN ('requires', 'implies')),
+    PRIMARY KEY (source_id, target_id)
+);
+INSERT INTO project_links (source_id, target_id, kind)
+    SELECT project_id, requires_id, 'requires' FROM prerequisites;
+DROP TABLE prerequisites;
+CREATE INDEX IF NOT EXISTS idx_project_links_target ON project_links(target_id, kind);
+`
+
+// migration7 replaces the failed clock-mode experiment with a per-project
+// supplement prompt: the recorded clock times move into the free-text note,
+// old "time" projects become ordinary check projects, the deadline survives as
+// the prompt's starting text, and the unused time/reminder columns are dropped.
+const migration7SQL = `
+ALTER TABLE projects ADD COLUMN note_prompt TEXT NOT NULL DEFAULT '';
+UPDATE checkins
+   SET note = CASE
+       WHEN note = '' THEN time
+       ELSE note || ' · ' || time
+   END
+ WHERE time <> '';
+UPDATE projects SET note_prompt = '原准时目标 ' || target_time WHERE target_time <> '';
+UPDATE projects SET mode = 'check' WHERE mode = 'time';
+ALTER TABLE projects DROP COLUMN target_time;
+ALTER TABLE projects DROP COLUMN reminder_time;
+ALTER TABLE checkins DROP COLUMN time;
+`
+
 // DB is the SQLite-backed store. One connection is deliberate: SQLite writes
 // serialize anyway, and a single connection removes SQLITE_BUSY entirely while
 // keeping every query in the microsecond range. WAL still lets the OS cache
@@ -80,6 +116,10 @@ ALTER TABLE checkins ADD COLUMN photo TEXT NOT NULL DEFAULT '';
 type DB struct {
 	sql *sql.DB
 	now func() time.Time
+	// dsn and abs are kept so Reset can reopen the same database after deleting
+	// its files. abs is empty for the in-memory test database.
+	dsn string
+	abs string
 }
 
 // Open opens (creating if needed) the database at path and migrates it.
@@ -105,6 +145,24 @@ func Open(path string, now func() time.Time) (*DB, error) {
 		dsn = filepath.ToSlash(abs)
 	}
 
+	sqlDB, err := openSQLite(dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db := &DB{sql: sqlDB, now: now, dsn: dsn, abs: abs}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.prepare(ctx); err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+// openSQLite opens the pool with the single-connection policy the store relies
+// on. Keeping it separate lets Reset recreate the pool for the same DSN.
+func openSQLite(dsn string) (*sql.DB, error) {
 	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite: %w", err)
@@ -112,31 +170,34 @@ func Open(path string, now func() time.Time) (*DB, error) {
 	sqlDB.SetMaxOpenConns(1)
 	sqlDB.SetMaxIdleConns(1)
 	sqlDB.SetConnMaxLifetime(0)
+	return sqlDB, nil
+}
 
-	db := &DB{sql: sqlDB, now: now}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := sqlDB.PingContext(ctx); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("store: ping sqlite: %w", err)
+// prepare pings, applies the connection pragmas and migrates the schema. The
+// caller owns the pool and closes it if prepare fails.
+func (d *DB) prepare(ctx context.Context) error {
+	if err := d.sql.PingContext(ctx); err != nil {
+		return fmt.Errorf("store: ping sqlite: %w", err)
 	}
-	if err := db.configure(ctx); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+	if err := d.configure(ctx); err != nil {
+		return err
 	}
-	if err := db.migrate(ctx); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+	if err := d.migrate(ctx); err != nil {
+		return err
 	}
-	if abs != "" {
-		// Migration wrote the first pages, so the WAL sidecars exist by now.
-		// Best effort: a filesystem that refuses chmod (some network mounts)
-		// must not prevent the app from starting.
-		for _, suffix := range []string{"", "-wal", "-shm"} {
-			_ = os.Chmod(abs+suffix, 0o600)
-		}
+	d.chmod()
+	return nil
+}
+
+// chmod makes the database and its sidecars owner-only. Best effort: a
+// filesystem that refuses chmod (some network mounts) must not prevent startup.
+func (d *DB) chmod() {
+	if d.abs == "" {
+		return
 	}
-	return db, nil
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Chmod(d.abs+suffix, 0o600)
+	}
 }
 
 // configure applies the connection pragmas. With one connection they persist
@@ -189,6 +250,16 @@ func (d *DB) migrate(ctx context.Context) error {
 			return fmt.Errorf("store: apply schema v5: %w", err)
 		}
 	}
+	if version < 6 {
+		if _, err := d.sql.ExecContext(ctx, migration6SQL); err != nil {
+			return fmt.Errorf("store: apply schema v6: %w", err)
+		}
+	}
+	if version < 7 {
+		if _, err := d.sql.ExecContext(ctx, migration7SQL); err != nil {
+			return fmt.Errorf("store: apply schema v7: %w", err)
+		}
+	}
 	if _, err := d.sql.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
 		return fmt.Errorf("store: stamp schema version: %w", err)
 	}
@@ -197,6 +268,62 @@ func (d *DB) migrate(ctx context.Context) error {
 
 // Close closes the underlying connection pool.
 func (d *DB) Close() error { return d.sql.Close() }
+
+// Reset deletes the database files and recreates the schema, optionally seeding
+// the demo data. It is destructive and must be serialized against every other
+// query: the HTTP layer holds an exclusive lock for the whole call, so no
+// request can observe the pool between Close and the fresh open.
+//
+// The request context is detached from cancellation: once the delete has begun,
+// stopping halfway because the browser hung up would leave a half-reset app.
+func (d *DB) Reset(ctx context.Context, seed bool) (int, error) {
+	resetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+
+	if err := d.sql.Close(); err != nil {
+		return 0, fmt.Errorf("store: close for reset: %w", err)
+	}
+	if d.abs != "" {
+		// Remove the sidecars first: if the main file cannot be removed, reopening
+		// the old database is safer without a stale WAL next to it.
+		for _, suffix := range []string{"-wal", "-shm", "-journal", ""} {
+			if err := os.Remove(d.abs + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+				// Reopen what is still there: a failed delete must not leave every
+				// later request talking to a closed pool.
+				if reopenErr := d.reopen(resetCtx); reopenErr != nil {
+					return 0, fmt.Errorf("store: remove database file: %v (reopen: %w)", err, reopenErr)
+				}
+				return 0, fmt.Errorf("store: remove database file: %w", err)
+			}
+		}
+	}
+	if err := d.reopen(resetCtx); err != nil {
+		return 0, err
+	}
+	if !seed {
+		return 0, nil
+	}
+	seeded, err := d.SeedDemo(resetCtx)
+	if err != nil {
+		return 0, fmt.Errorf("store: seed after reset: %w", err)
+	}
+	d.chmod()
+	return seeded, nil
+}
+
+// reopen replaces the closed pool with a fresh one for the same DSN.
+func (d *DB) reopen(ctx context.Context) error {
+	sqlDB, err := openSQLite(d.dsn)
+	if err != nil {
+		return err
+	}
+	d.sql = sqlDB
+	if err := d.prepare(ctx); err != nil {
+		_ = sqlDB.Close()
+		return err
+	}
+	return nil
+}
 
 // Ping verifies the database is reachable; readiness probes use it.
 func (d *DB) Ping(ctx context.Context) error { return d.sql.PingContext(ctx) }

@@ -14,7 +14,6 @@ import { TodayView } from './components/TodayView'
 import { Button } from './components/ui'
 import { AppProvider, useApp } from './hooks/useApp'
 import { navigate, parseHash, useHashRoute, type Route } from './hooks/useNow'
-import { useReminders } from './hooks/useReminders'
 import { describeError } from './lib/errors'
 
 /**
@@ -88,8 +87,6 @@ function tabOf(route: Route): Tab | null {
  */
 function Router() {
   const route = useHashRoute()
-  const { projects, notifications } = useApp()
-  useReminders(projects, notifications.enabled)
   const [tab, setTab] = useState<Tab>(() => tabOf(parseHash(window.location.hash)) ?? 'today')
 
   // Render-phase adjustment (the React docs' "derive state from props"

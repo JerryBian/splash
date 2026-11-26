@@ -59,7 +59,7 @@ describe('formatRelativeTime', () => {
 })
 
 describe('scheduleLabel', () => {
-  const base = { target: 1, unit: '次', weekdays: [] as number[], interval: 0, nature: 'good' as const, mode: 'value' as const, targetTime: '' }
+  const base = { target: 1, unit: '次', weekdays: [] as number[], interval: 0, nature: 'good' as const }
   it('describes every schedule family', () => {
     expect(scheduleLabel({ ...base, schedule: 'daily', target: 8, unit: '杯' })).toBe('每天 8 杯')
     expect(scheduleLabel({ ...base, schedule: 'weekdays', weekdays: [5, 1, 3] })).toBe('每周一、三、五 1 次')
@@ -71,10 +71,6 @@ describe('scheduleLabel', () => {
   it('phrases a bad habit as avoidance', () => {
     expect(scheduleLabel({ ...base, schedule: 'daily', nature: 'bad' })).toBe('每天 避免')
     expect(scheduleLabel({ ...base, schedule: 'weekly', nature: 'bad' })).toBe('每周 避免')
-  })
-  it('phrases a time habit with its deadline', () => {
-    expect(scheduleLabel({ ...base, schedule: 'daily', mode: 'time', targetTime: '23:00' })).toBe('每天 23:00 前')
-    expect(scheduleLabel({ ...base, schedule: 'daily', mode: 'time', targetTime: '' })).toBe('每天 记录时间')
   })
   it('names the families for pickers', () => {
     expect(scheduleName('daily')).toBe('每天')
@@ -95,7 +91,7 @@ describe('periodLabel', () => {
 })
 
 describe('progressLabel', () => {
-  const base = { nature: 'good' as const, mode: 'value' as const }
+  const base = { nature: 'good' as const }
   it('shows value over target with the unit', () => {
     expect(progressLabel({ ...base, schedule: 'daily', unit: '杯' }, 5, 8)).toBe('5 / 8 杯')
   })
@@ -104,9 +100,5 @@ describe('progressLabel', () => {
   })
   it('shows a lapse count for a bad habit', () => {
     expect(progressLabel({ ...base, schedule: 'daily', unit: '次', nature: 'bad' }, 2, 1)).toBe('2 次')
-  })
-  it('only says whether a time habit was recorded', () => {
-    expect(progressLabel({ ...base, schedule: 'daily', unit: '次', mode: 'time' }, 0, 1)).toBe('待记录')
-    expect(progressLabel({ ...base, schedule: 'daily', unit: '次', mode: 'time' }, 1, 1)).toBe('已记录')
   })
 })

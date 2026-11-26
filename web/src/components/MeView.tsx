@@ -3,10 +3,11 @@ import { api } from '../api/client'
 import type { ExportData, Health, VersionInfo } from '../api/types'
 import type { ThemeChoice } from '../lib/theme'
 import { useApp } from '../hooks/useApp'
-import { describeError } from '../lib/errors'
-import { DownloadIcon, LogOutIcon, MonitorIcon, MoonIcon, SealMark, SunIcon, UploadIcon } from './icons'
+import { describeError, fieldErrorsFrom } from '../lib/errors'
+import { DownloadIcon, LogOutIcon, MonitorIcon, MoonIcon, SealMark, SunIcon, TrashIcon, UploadIcon } from './icons'
+import { ConfirmDialog } from './overlays'
 import { ServicePanel } from './ServicePanel'
-import { Button, Segmented, Switch } from './ui'
+import { Button, Field, Input, Segmented } from './ui'
 
 const THEME_OPTIONS: { value: ThemeChoice; label: ReactNode }[] = [
   { value: 'light', label: <span className="theme-option"><SunIcon size={15} /> 浅色</span> },
@@ -20,11 +21,15 @@ const THEME_OPTIONS: { value: ThemeChoice; label: ReactNode }[] = [
  * account — signing out returns to the login gate.
  */
 export function MeView() {
-  const { session, projects, theme, setTheme, notifications, logout, refresh, toast } = useApp()
+  const { session, projects, theme, setTheme, logout, refresh, toast } = useApp()
   const [diagnostics, setDiagnostics] = useState<{ health: Health; version: VersionInfo } | null>(null)
   const [diagOpen, setDiagOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetError, setResetError] = useState('')
+  const [resetting, setResetting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const onImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -79,6 +84,48 @@ export function MeView() {
     }
   }
 
+  const openReset = () => {
+    setResetPassword('')
+    setResetError('')
+    setResetOpen(true)
+  }
+
+  const closeReset = () => {
+    if (resetting) return
+    setResetOpen(false)
+    setResetPassword('')
+    setResetError('')
+  }
+
+  const doReset = async () => {
+    if (resetting) return
+    if (resetPassword === '') {
+      setResetError('请输入管理员密码')
+      return
+    }
+    setResetting(true)
+    setResetError('')
+    try {
+      const result = await api.resetDatabase(resetPassword)
+      setResetOpen(false)
+      setResetting(false)
+      toast(
+        result.seededProjects > 0
+          ? `数据库已重置，并恢复 ${result.seededProjects} 个示例项目`
+          : '数据库已重置，回到初始状态',
+        'ok',
+      )
+      // Every page caches its own loads and the provider holds the old lists;
+      // a full reload is the only way to guarantee they all start from the
+      // fresh database. The short delay lets the toast paint first.
+      window.setTimeout(() => window.location.assign('/'), 450)
+    } catch (error) {
+      const fields = fieldErrorsFrom(error)
+      setResetError(fields['password'] ?? describeError(error))
+      setResetting(false)
+    }
+  }
+
   return (
     <div className="view me">
       <h1 className="view-title">我的</h1>
@@ -106,32 +153,6 @@ export function MeView() {
         />
       </section>
 
-      <section className="detail-section panel chart-panel" aria-label="提醒">
-        <h2 className="section-head">提醒</h2>
-        <p className="sheet-note">
-          项目设了「每日提醒」后，应用开着时到点会用站内提示提醒你；允许浏览器通知后，切到其他标签页也能收到系统通知。
-        </p>
-        {notifications.supported ? (
-          <Switch
-            checked={notifications.enabled}
-            onChange={(on) => {
-              if (on) void notifications.enable()
-              else notifications.disable()
-            }}
-            label="浏览器通知"
-            hint={
-              notifications.permission === 'denied'
-                ? '浏览器已拒绝通知，请在站点设置中恢复'
-                : notifications.permission === 'granted'
-                  ? '已允许；关闭只停止本设备的系统通知'
-                  : '打开时会请求浏览器权限'
-            }
-          />
-        ) : (
-          <p className="sheet-note">当前浏览器不支持系统通知，站内提示仍会照常工作。</p>
-        )}
-      </section>
-
       <section className="detail-section panel chart-panel" aria-label="数据">
         <h2 className="section-head">数据</h2>
         <p className="sheet-note">
@@ -154,6 +175,16 @@ export function MeView() {
         </div>
       </section>
 
+      <section className="detail-section panel chart-panel" aria-label="危险操作">
+        <h2 className="section-head">危险操作</h2>
+        <p className="sheet-note">
+          重置会删除服务器上的 SQLite 数据库文件并重新初始化；所有项目、打卡、分类、关联与跳过记录都会消失，无法撤销。请先导出备份。
+        </p>
+        <Button variant="danger" onClick={openReset}>
+          <TrashIcon size={15} /> 重置数据库
+        </Button>
+      </section>
+
       <section className="detail-section panel chart-panel" aria-label="诊断">
         <details
           className="diagnostics"
@@ -174,6 +205,34 @@ export function MeView() {
         <br />
         把每一天盖成印章。
       </p>
+
+      <ConfirmDialog
+        open={resetOpen}
+        title="重置数据库？"
+        message="这会删除数据库文件并回到初始状态，所有数据无法恢复。请输入管理员密码确认。"
+        confirmLabel="删除并重置"
+        danger
+        pending={resetting}
+        confirmDisabled={resetPassword === ''}
+        onConfirm={() => void doReset()}
+        onClose={closeReset}
+      >
+        <Field label="管理员密码" htmlFor="reset-password" error={resetError}>
+          <Input
+            id="reset-password"
+            type="password"
+            autoComplete="current-password"
+            value={resetPassword}
+            onChange={(event) => {
+              setResetPassword(event.target.value)
+              setResetError('')
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && resetPassword !== '') void doReset()
+            }}
+          />
+        </Field>
+      </ConfirmDialog>
     </div>
   )
 }

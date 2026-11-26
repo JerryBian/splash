@@ -56,7 +56,13 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 			Name: p.Name, Description: p.Description, Icon: p.Icon, Color: p.Color,
 			Nature: p.Nature, Schedule: p.Schedule, Mode: p.Mode, Target: p.Target,
 			Unit: p.Unit, Weekdays: p.Weekdays, Interval: p.Interval,
-			TargetTime: p.TargetTime, ReminderTime: p.ReminderTime, StartDate: p.StartDate, Pinned: p.Pinned,
+			NotePrompt: p.NotePrompt, StartDate: p.StartDate, Pinned: p.Pinned,
+			Prerequisites: uuidStrings(p.Prerequisites), Postrequisites: uuidStrings(p.Postrequisites),
+		}
+		// Backups made before time mode was retired still say mode=time; the
+		// closest equivalent now is a check habit (one record completes it).
+		if in.Mode == "time" {
+			in.Mode = ModeCheck
 		}
 		if p.CategoryID != uuid.Nil() {
 			in.CategoryID = p.CategoryID.String()
@@ -76,9 +82,6 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 		}
 		if c.Value <= 0 || c.Value > MaxTargetValue {
 			problems = append(problems, &FieldError{Field: "checkins", Message: "value out of range"})
-		}
-		if !ValidClock(c.Time) {
-			problems = append(problems, &FieldError{Field: "checkins", Message: "time must be HH:MM"})
 		}
 		if photoErr := validatePhoto(c.Photo); photoErr != nil {
 			problems = append(problems, &FieldError{Field: "checkins", Message: photoErr.Message})
@@ -101,6 +104,24 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 				problems = append(problems, &FieldError{Field: "prerequisites", Message: "references a project that is not in the backup"})
 			}
 		}
+		for _, r := range p.Postrequisites {
+			if !validProjects[r] {
+				problems = append(problems, &FieldError{Field: "postrequisites", Message: "references a project that is not in the backup"})
+			}
+		}
+	}
+	// The whole combined graph must stay acyclic; raw inserts bypass
+	// checkLinkGraph, so validate it here before opening the transaction.
+	adj := make(map[uuid.UUID][]uuid.UUID, len(existing)+len(data.Projects))
+	for _, p := range existing {
+		adj[p.ID] = append(append([]uuid.UUID{}, p.Prerequisites...), p.Postrequisites...)
+	}
+	for _, p := range data.Projects {
+		adj[p.ID] = append(adj[p.ID], p.Prerequisites...)
+		adj[p.ID] = append(adj[p.ID], p.Postrequisites...)
+	}
+	if hasLinkCycle(adj) {
+		problems = append(problems, &FieldError{Field: "links", Message: "import would create a dependency cycle"})
 	}
 	if err := collect(problems); err != nil {
 		return counts, err
@@ -130,26 +151,41 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 		counts.Categories += n
 	}
 	for _, p := range data.Projects {
+		mode, target, unit := p.Mode, p.Target, p.Unit
+		if mode == "time" {
+			// Retired time-mode backups become check habits.
+			mode, target, unit = ModeCheck, 1, "次"
+		}
 		n, err := exec(`INSERT OR IGNORE INTO projects (`+projectColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			p.ID.String(), p.Name, p.Description, p.Icon, p.Color, categoryArg(p.CategoryID),
-			p.Nature, string(p.Schedule), p.Mode, p.Target, p.Unit, weekdaysCSV(p.Weekdays),
-			p.Interval, p.TargetTime, p.ReminderTime, p.StartDate, boolInt(p.Archived), boolInt(p.Pinned),
+			p.Nature, string(p.Schedule), mode, target, unit, weekdaysCSV(p.Weekdays),
+			p.Interval, p.NotePrompt, p.StartDate, boolInt(p.Archived), boolInt(p.Pinned),
 			toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
 		if err != nil {
 			return counts, fmt.Errorf("import project: %w", err)
 		}
 		counts.Projects += n
+	}
+	// Links go in a second pass: a postrequisite may point at a project created
+	// later in the same backup, and the foreign key requires the row to exist.
+	for _, p := range data.Projects {
 		for _, r := range p.Prerequisites {
-			if _, err := exec(`INSERT OR IGNORE INTO prerequisites (project_id, requires_id) VALUES (?, ?)`,
+			if _, err := exec(`INSERT OR IGNORE INTO project_links (source_id, target_id, kind) VALUES (?, ?, 'requires')`,
 				p.ID.String(), r.String()); err != nil {
 				return counts, fmt.Errorf("import prerequisite: %w", err)
 			}
 		}
+		for _, r := range p.Postrequisites {
+			if _, err := exec(`INSERT OR IGNORE INTO project_links (source_id, target_id, kind) VALUES (?, ?, 'implies')`,
+				p.ID.String(), r.String()); err != nil {
+				return counts, fmt.Errorf("import postrequisite: %w", err)
+			}
+		}
 	}
 	for _, c := range data.Checkins {
-		n, err := exec(`INSERT OR IGNORE INTO checkins (`+checkinColumns+`, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.Time, c.LocalDate,
+		n, err := exec(`INSERT OR IGNORE INTO checkins (`+checkinColumns+`, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.LocalDate,
 			toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt), c.Photo)
 		if err != nil {
 			return counts, fmt.Errorf("import checkin: %w", err)

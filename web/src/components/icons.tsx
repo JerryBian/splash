@@ -84,6 +84,7 @@ export const ArchiveIcon = icon(
 )
 export const ChevronLeftIcon = icon(<polyline points="15 18 9 12 15 6" />)
 export const ChevronRightIcon = icon(<polyline points="9 18 15 12 9 6" />)
+export const ChevronDownIcon = icon(<polyline points="6 9 12 15 18 9" />)
 export const ClockIcon = icon(
   <>
     <circle cx="12" cy="12" r="9" />
@@ -155,6 +156,12 @@ export const CameraIcon = icon(
   <>
     <path d="M4 8h3l2-3h6l2 3h3v11H4Z" />
     <circle cx="12" cy="13" r="3.5" />
+  </>,
+)
+export const LinkIcon = icon(
+  <>
+    <path d="M10 13a5 5 0 0 0 7.5.5l2-2a5 5 0 0 0-7-7l-1 1" />
+    <path d="M14 11a5 5 0 0 0-7.5-.5l-2 2a5 5 0 0 0 7 7l1-1" />
   </>,
 )
 

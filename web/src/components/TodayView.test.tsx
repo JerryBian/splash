@@ -155,9 +155,29 @@ describe('TodayView', () => {
     expect(screen.getByText('冥想')).toBeInTheDocument()
   })
 
-  it('invites the admin to create the first project when empty', () => {    stubFetch(refreshRoutes([]))
+  it('shows the postrequisite commitment state on a completed card', () => {
+    const pending = makeProject({
+      id: 'p-pending', name: '跑步', icon: '🏃',
+      status: makeStatus({ status: 'done', value: 1, todayValue: 1, pendingPosts: ['p-2'] }),
+    })
+    const broken = makeProject({
+      id: 'p-broken', name: '晨跑', icon: '🌅',
+      status: makeStatus({ status: 'done', value: 1, todayValue: 1, brokenPosts: ['p-2'] }),
+    })
+    stubFetch(refreshRoutes([pending, broken]))
     render(
-      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [], overview: makeOverview({ today: { date: TEST_TODAY, total: 0, done: 0, pending: 0, skipped: 0, due: 0, slipped: 0 }, totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 } }) })}>
+      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [pending, broken] })}>
+        <TodayView />
+      </AppProvider>,
+    )
+    expect(screen.getByText('待兑现 1 个后置')).toBeInTheDocument()
+    expect(screen.getByText('未兑现 1 个后置')).toBeInTheDocument()
+  })
+
+  it('invites the admin to create the first project when empty', () => {
+    stubFetch(refreshRoutes([]))
+    render(
+      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [], overview: makeOverview({ today: { date: TEST_TODAY, total: 0, done: 0, pending: 0, skipped: 0, due: 0, slipped: 0 }, totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0, postReqs: 0, postViolations: 0 } }) })}>
         <TodayView />
       </AppProvider>,
     )

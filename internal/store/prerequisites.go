@@ -6,65 +6,20 @@ import (
 	"uuid"
 )
 
-// Prerequisite verdicts are derived, never stored (same invariant as streaks
-// and misses): a check-in is "violated" when its project had an unmet
-// prerequisite on the credited day. Backfilling the prerequisite later clears
-// the violation on the next read, which is exactly the forgiveness the product
-// wants ("I forgot to tick reading, then I backfilled it").
+// Link verdicts are derived, never stored (same invariant as streaks and
+// misses). A prerequisite violation is judged on the day of the check-in; a
+// postrequisite commitment is only a violation once its completion day has
+// ended. Backfilling either side later clears the verdict on the next read,
+// which is the forgiveness the product wants.
 
-// UnmetByDay evaluates, for each requested day, which of p's prerequisites were
-// NOT resolved on that day. One batched load per prerequisite keeps this cheap
-// even for a long history page.
-func (d *DB) UnmetByDay(ctx context.Context, p Project, days []string) (map[string][]uuid.UUID, error) {
-	out := make(map[string][]uuid.UUID, len(days))
-	if len(p.Prerequisites) == 0 || len(days) == 0 {
-		return out, nil
-	}
-	maxDay := days[0]
-	for _, day := range days {
-		if day > maxDay {
-			maxDay = day
-		}
-	}
-
-	type prereqData struct {
-		project Project
-		agg     map[string]DayAggregate
-		skips   map[string]string
-	}
-	loaded := make([]prereqData, 0, len(p.Prerequisites))
-	for _, id := range p.Prerequisites {
-		prereq, err := d.Projects().Get(ctx, id)
-		if err != nil {
-			// A deleted prerequisite cascades its edges away, so this only
-			// happens on a stale read; treat it as resolved rather than fail.
-			continue
-		}
-		agg, err := d.Checkins().Aggregates(ctx, id, prereq.StartDate, maxDay)
-		if err != nil {
-			return nil, err
-		}
-		skips, err := d.Skips().Map(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		loaded = append(loaded, prereqData{project: prereq, agg: agg, skips: skips})
-	}
-
-	for _, day := range days {
-		unmet := []uuid.UUID{}
-		for _, pd := range loaded {
-			if !PrereqSatisfied(pd.project, day, pd.agg, pd.skips) {
-				unmet = append(unmet, pd.project.ID)
-			}
-		}
-		out[day] = unmet
-	}
-	return out, nil
-}
-
-// enrichCheckins fills the derived Violated/Unmet fields on a page of
-// check-ins, grouping by project so each project's prerequisites load once.
+// enrichCheckins fills the derived link fields on a page of check-ins, grouping
+// by project so each project's links load once.
+//
+// Prerequisites: Unmet/Violated, as before.
+// Postrequisites: PostUnmet on a closed completion day, PostPending while the
+// completion day is still today. Only the check-in day that actually reached
+// the target carries the verdict, so a weekly goal's earlier partial days stay
+// quiet.
 func (d *DB) enrichCheckins(ctx context.Context, checkins []Checkin) error {
 	if len(checkins) == 0 {
 		return nil
@@ -73,45 +28,77 @@ func (d *DB) enrichCheckins(ctx context.Context, checkins []Checkin) error {
 	for _, c := range checkins {
 		byProject[c.ProjectID] = append(byProject[c.ProjectID], c.LocalDate)
 	}
-	verdicts := map[uuid.UUID]map[string][]uuid.UUID{}
+
+	type projectVerdicts struct {
+		prereqs     map[string][]uuid.UUID
+		postUnmet   map[string][]uuid.UUID
+		postPending map[string][]uuid.UUID
+	}
+	verdicts := map[uuid.UUID]projectVerdicts{}
+	today := d.Today()
 	for id, days := range byProject {
 		p, err := d.Projects().Get(ctx, id)
 		if err != nil {
 			return fmt.Errorf("enrich checkins: %w", err)
 		}
-		m, err := d.UnmetByDay(ctx, p, days)
+		links, err := d.loadProjectLinks(ctx, p, today)
 		if err != nil {
 			return err
 		}
-		verdicts[id] = m
+		verdict := projectVerdicts{
+			prereqs:     unmetPrereqsByDay(links.prereqs, days),
+			postUnmet:   map[string][]uuid.UUID{},
+			postPending: map[string][]uuid.UUID{},
+		}
+		if p.Nature != NatureBad && len(links.posts) > 0 {
+			agg, err := d.Checkins().Aggregates(ctx, p.ID, p.StartDate, today)
+			if err != nil {
+				return err
+			}
+			// Completion days are per period; cache them so a page with many
+			// check-ins in the same week does not re-walk the period.
+			completionByPeriod := map[string]string{}
+			for _, day := range days {
+				completion := ""
+				if p.Schedule == ScheduleIntervalHours {
+					// Interval check-ins are events: any check-in day triggers.
+					if agg[day].Count > 0 {
+						completion = day
+					}
+				} else {
+					period := PeriodFor(p, day)
+					cached, seen := completionByPeriod[period.Key]
+					if !seen {
+						cached = periodCompletionDay(p, period, today, agg)
+						completionByPeriod[period.Key] = cached
+					}
+					completion = cached
+				}
+				if completion == "" || completion != day {
+					continue
+				}
+				unmet := unresolvedPostTargets(links.posts, day)
+				if len(unmet) == 0 {
+					continue
+				}
+				if day == today {
+					verdict.postPending[day] = unmet
+				} else {
+					verdict.postUnmet[day] = unmet
+				}
+			}
+		}
+		verdicts[id] = verdict
 	}
+
 	for i := range checkins {
-		unmet := verdicts[checkins[i].ProjectID][checkins[i].LocalDate]
-		checkins[i].Unmet = unmet
-		checkins[i].Violated = len(unmet) > 0
+		checkin := &checkins[i]
+		verdict := verdicts[checkin.ProjectID]
+		unmet := verdict.prereqs[checkin.LocalDate]
+		checkin.Unmet = unmet
+		checkin.Violated = len(unmet) > 0
+		checkin.PostUnmet = verdict.postUnmet[checkin.LocalDate]
+		checkin.PostPending = verdict.postPending[checkin.LocalDate]
 	}
 	return nil
-}
-
-// countViolations sums, over the days that have check-ins, how many check-ins
-// landed while a prerequisite was unmet. Used by project totals and overview.
-func (d *DB) countViolations(ctx context.Context, p Project, agg map[string]DayAggregate) (int, error) {
-	if len(p.Prerequisites) == 0 {
-		return 0, nil
-	}
-	days := make([]string, 0, len(agg))
-	for day := range agg {
-		days = append(days, day)
-	}
-	m, err := d.UnmetByDay(ctx, p, days)
-	if err != nil {
-		return 0, err
-	}
-	total := 0
-	for day, unmet := range m {
-		if len(unmet) > 0 {
-			total += agg[day].Count
-		}
-	}
-	return total, nil
 }

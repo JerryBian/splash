@@ -6,7 +6,8 @@ import { achievements } from './achievements'
 function totals(over: Partial<Totals> = {}): Totals {
   return {
     checkins: 0, value: 0, activeDays: 0, done: 0, missed: 0, skipped: 0,
-    completionRate: 0, onTimeRate: 0, onTimeCount: 0, lateCount: 0, avgTime: '', backfilled: 0, violations: 0,
+    completionRate: 0, onTimeRate: 0, onTimeCount: 0, lateCount: 0, backfilled: 0, violations: 0,
+    postReqs: 0, postViolations: 0, commitmentRate: 0,
     ...over,
   }
 }
@@ -39,12 +40,20 @@ describe('achievements', () => {
     expect(list.some((a) => a.id.startsWith('count-'))).toBe(false)
     expect(list.find((a) => a.id === 'period-10')?.label).toContain('守住')
   })
-  it('adds punctuality badges only when a deadline exists', () => {
-    const timed = makeProject({ mode: 'time', targetTime: '23:00' })
-    const list = achievements(timed, totals({ onTimeCount: 12 }), makeStatus())
+  it('adds punctuality badges for interval projects', () => {
+    const interval = makeProject({ schedule: 'interval_hours', interval: 2 })
+    const list = achievements(interval, totals({ onTimeCount: 12 }), makeStatus())
     expect(list.find((a) => a.id === 'ontime-10')?.earned).toBe(true)
     expect(list.find((a) => a.id === 'ontime-30')?.earned).toBe(false)
-    const noDeadline = achievements(makeProject({ mode: 'time' }), totals({ onTimeCount: 50 }), makeStatus())
-    expect(noDeadline.some((a) => a.id.startsWith('ontime-'))).toBe(false)
+    const still = achievements(makeProject({ schedule: 'daily' }), totals({ onTimeCount: 50 }), makeStatus())
+    expect(still.some((a) => a.id.startsWith('ontime-'))).toBe(false)
+  })
+  it('rewards fulfilled postrequisite commitments only when there are some', () => {
+    const linked = makeProject({ postrequisites: ['p-2'] })
+    const list = achievements(linked, totals({ postReqs: 12, postViolations: 2 }), makeStatus())
+    expect(list.find((a) => a.id === 'link-10')?.earned).toBe(true)
+    expect(list.find((a) => a.id === 'link-30')?.earned).toBe(false)
+    const unlinked = achievements(makeProject(), totals({ postReqs: 50 }), makeStatus())
+    expect(unlinked.some((a) => a.id.startsWith('link-'))).toBe(false)
   })
 })

@@ -4,13 +4,13 @@ import { navigate } from '../hooks/useNow'
 import { addDays, formatDayCN, parseDay } from '../lib/date'
 import { formatValue } from '../lib/format'
 import { Donut, Heatmap, ProgressRing, Sparkline, TrendBars } from './charts'
-import { AlertIcon, ChartIcon, CheckIcon, FlameIcon, LayersIcon, SealMark, TargetIcon, TrophyIcon } from './icons'
+import { AlertIcon, ChartIcon, CheckIcon, FlameIcon, LayersIcon, LinkIcon, SealMark, TargetIcon, TrophyIcon } from './icons'
 import { EmptyState, NatureBadge, RecordBadges, StatTile } from './ui'
 import type { HeatCell } from '../api/types'
 
 /**
  * The dashboard: a hero panel with the day's ring and a 7-day sparkline,
- * four stat tiles (two carrying their own sparklines), then paired chart
+ * six stat tiles (two carrying their own sparklines), then paired chart
  * panels — activity heatmap beside the weekly trend, category donut beside
  * the streak leaderboard. Cross-project charts wear the calm brand celadon;
  * only the category donut uses entity inks, each with a labelled legend.
@@ -128,8 +128,22 @@ export function StatsView() {
         <StatTile label="本月打卡" value={overview.totals.monthCheckins} icon={<FlameIcon size={14} />} sub="好习惯 · 次" spark={monthSpark} />
         <StatTile label="最佳连续" value={overview.totals.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
         <StatTile label="活跃项目" value={overview.totals.activeProjects} icon={<LayersIcon size={14} />} sub="个" />
-        <StatTile label="破戒次数" value={overview.totals.slips} icon={<AlertIcon size={14} />} sub="坏习惯 · 次" />
-        <StatTile label="本月破戒" value={overview.totals.monthSlips} icon={<AlertIcon size={14} />} sub="坏习惯 · 次" />
+        <StatTile
+          label="破戒次数"
+          value={overview.totals.slips}
+          icon={<AlertIcon size={14} />}
+          sub={`坏习惯 · 本月 ${overview.totals.monthSlips} 次`}
+        />
+        <StatTile
+          label="连带未兑现"
+          value={overview.totals.postViolations}
+          icon={<LinkIcon size={14} />}
+          sub={
+            overview.totals.postReqs > 0
+              ? `已兑现 ${overview.totals.postReqs - overview.totals.postViolations}/${overview.totals.postReqs}`
+              : '还没有后置承诺'
+          }
+        />
       </section>
 
       <div className="stats-cols">
@@ -235,30 +249,37 @@ export function StatsView() {
         ) : null}
       </div>
 
-      {overview.violations > 0 ? (
-        <section className="detail-section panel chart-panel violations-panel" aria-label="前置违规">
+      {overview.violations > 0 || overview.totals.postViolations > 0 ? (
+        <section className="detail-section panel chart-panel violations-panel" aria-label="关联违规">
           <h2 className="section-head">
-            <AlertIcon size={15} /> 前置违规
-            <span className="section-hint">{overview.violations} 次 · 没完成前置就打了卡</span>
+            <AlertIcon size={15} /> 关联违规
+            <span className="section-hint">
+              {overview.violations} 次前置 · {overview.totals.postViolations} 次连带
+            </span>
           </h2>
           <ul className="record-list">
             {overview.recentViolations.map((c) => {
               const p = projects.find((x) => x.id === c.projectId)
+              const names = (ids: string[]) => ids.map((id) => projects.find((x) => x.id === id)?.name ?? id).join('、')
               return (
                 <li key={c.id} className="record">
                   <span className="record-value">
                     <span aria-hidden="true">{p?.icon}</span> {p?.name ?? c.projectId}
                   </span>
                   <span className="record-meta">
-                    {formatDayCN(c.localDate)} · 未满足：
-                    {c.unmet.map((id) => projects.find((x) => x.id === id)?.name ?? id).join('、')}
+                    {formatDayCN(c.localDate)}
+                    {c.unmet.length > 0 ? ` · 前置未满足：${names(c.unmet)}` : ''}
+                    {c.postUnmet.length > 0 ? ` · 连带未兑现：${names(c.postUnmet)}` : ''}
                   </span>
+                  {c.postUnmet.length > 0 ? (
+                    <span className="rec-badge" data-kind="post">连带</span>
+                  ) : null}
                   <RecordBadges backfilled={c.backfilled} violated={c.violated} />
                 </li>
               )
             })}
           </ul>
-          <p className="sheet-note">补卡对应前置后，该违规会自动消除。</p>
+          <p className="sheet-note">补卡对应项目到同一天后，前置/连带违规会自动消除。</p>
         </section>
       ) : null}
 

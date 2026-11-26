@@ -44,6 +44,7 @@ func TestSecurityEveryDataRouteRejectsAnonymous(t *testing.T) {
 		{http.MethodPatch, "/api/v1/categories/00000000-0000-7000-8000-000000000000", categoryRequest{Name: "c"}},
 		{http.MethodDelete, "/api/v1/categories/00000000-0000-7000-8000-000000000000", nil},
 		{http.MethodGet, "/api/v1/export", nil},
+		{http.MethodPost, "/api/v1/admin/reset", resetRequest{Password: "splash123"}},
 	}
 	for _, rt := range routes {
 		resp, raw := api.do(t, rt.method, rt.path, rt.body)
