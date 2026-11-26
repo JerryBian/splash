@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { makeProject, makeStatus } from '../test/fixtures'
 import {
   activityLevel,
+  clockMinutes,
   dailyEquivalentTarget,
   heatLevel,
   isBad,
   isCheckable,
   isComplete,
+  isLate,
   needsValueSheet,
   STATUS_LABEL,
   statusLabel,
@@ -99,5 +101,30 @@ describe('needsValueSheet', () => {
     expect(needsValueSheet(makeProject({ target: 1, unit: '次' }))).toBe(false)
     expect(needsValueSheet(makeProject({ target: 3, unit: '次' }))).toBe(false)
     expect(needsValueSheet(makeProject({ schedule: 'interval_hours', interval: 2 }))).toBe(false)
+  })
+})
+
+describe('clock punctuality', () => {
+  it('parses valid and rejects malformed clocks', () => {
+    expect(clockMinutes('00:00')).toBe(0)
+    expect(clockMinutes('23:59')).toBe(1439)
+    expect(clockMinutes('9:00')).toBeNull()
+    expect(clockMinutes('24:00')).toBeNull()
+    expect(clockMinutes('')).toBeNull()
+  })
+  it('mirrors the server circular deadline rule', () => {
+    const bedtime = makeProject({ mode: 'time', targetTime: '23:00' })
+    expect(isLate(bedtime, { time: '22:40' })).toBe(false)
+    expect(isLate(bedtime, { time: '23:00' })).toBe(false)
+    expect(isLate(bedtime, { time: '00:10' })).toBe(true)
+    expect(isLate(bedtime, {})).toBe(false)
+
+    // An after-midnight deadline: the previous evening is still early.
+    const lateNight = makeProject({ mode: 'time', targetTime: '00:30' })
+    expect(isLate(lateNight, { time: '23:40' })).toBe(false)
+    expect(isLate(lateNight, { time: '00:40' })).toBe(true)
+    // No deadline or no time mode means no verdict.
+    expect(isLate(makeProject({ mode: 'time' }), { time: '23:40' })).toBe(false)
+    expect(isLate(makeProject({ mode: 'check', targetTime: '23:00' }), { time: '23:40' })).toBe(false)
   })
 })

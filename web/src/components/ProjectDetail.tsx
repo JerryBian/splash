@@ -8,7 +8,8 @@ import { fetchDay, invalidate } from '../lib/async'
 import { addDays, formatClock, formatDayCN, formatMonthShort, parseDay } from '../lib/date'
 import { describeError } from '../lib/errors'
 import { formatPercent, formatValue, periodLabel, progressLabel, scheduleLabel } from '../lib/format'
-import { dailyEquivalentTarget, isBad, statusLabel } from '../lib/schedule'
+import { dailyEquivalentTarget, isBad, isLate, isTime, statusLabel } from '../lib/schedule'
+import { Achievements } from './Achievements'
 import { CheckinSheet } from './CheckinSheet'
 import { Heatmap, TrendBars } from './charts'
 import {
@@ -21,6 +22,7 @@ import {
   FlameIcon,
   LockIcon,
   PencilIcon,
+  PinIcon,
   PlusIcon,
   SkipIcon,
   TargetIcon,
@@ -28,6 +30,7 @@ import {
   TrophyIcon,
 } from './icons'
 import { ConfirmDialog } from './overlays'
+import { PhotoThumb } from './PhotoThumb'
 import { Button, EmptyState, IconButton, NatureBadge, RecordBadges, StatTile } from './ui'
 
 /**
@@ -98,12 +101,26 @@ function DetailBody({ projectId }: { projectId: string }) {
   const summary = stats.summary
   const isInterval = project.schedule === 'interval_hours'
   const bad = isBad(project)
+  const timeMode = isTime(project)
 
   const toggleArchive = async () => {
     setBusy(true)
     try {
       await api.updateProject(projectId, { archived: !project.archived }, `"v${project.version}"`)
       toast(project.archived ? '已恢复项目' : '已归档项目', 'ok')
+      await afterMutation()
+    } catch (caught) {
+      toast(describeError(caught), 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const togglePin = async () => {
+    setBusy(true)
+    try {
+      await api.updateProject(projectId, { pinned: !project.pinned }, `"v${project.version}"`)
+      toast(project.pinned ? '已取消置顶' : '已置顶到今日页顶部', 'ok')
       await afterMutation()
     } catch (caught) {
       toast(describeError(caught), 'error')
@@ -148,6 +165,7 @@ function DetailBody({ projectId }: { projectId: string }) {
               </span>
             ) : null}
             <span className="mini-chip">{scheduleLabel(project)}</span>
+            {project.pinned ? <span className="mini-chip">置顶</span> : null}
             <span className="mini-chip">始于 {formatDayCN(project.startDate)}</span>
             {project.archived ? <span className="mini-chip">已归档</span> : null}
           </div>
@@ -171,7 +189,7 @@ function DetailBody({ projectId }: { projectId: string }) {
         </div>
         {!isInterval ? (
           <div className="detail-progress">
-            {bad ? null : (
+            {bad || timeMode ? null : (
               <span className="bar bar-big">
                 <span className="bar-fill" style={barStyle} />
               </span>
@@ -223,24 +241,43 @@ function DetailBody({ projectId }: { projectId: string }) {
         <StatTile label={bad ? '当前坚持' : '当前连续'} value={summary.streak} icon={<FlameIcon size={14} />} sub="个周期" />
         <StatTile label={bad ? '最佳坚持' : '最佳连续'} value={summary.bestStreak} icon={<TrophyIcon size={14} />} sub="个周期" />
         <StatTile
-          label={isInterval ? '按时率' : bad ? '守住率' : '完成率'}
-          value={formatPercent(isInterval ? stats.totals.onTimeRate : stats.totals.completionRate)}
+          label={isInterval ? '按时率' : timeMode ? '准时率' : bad ? '守住率' : '完成率'}
+          value={
+            timeMode && project.targetTime === ''
+              ? '—'
+              : formatPercent(isInterval || timeMode ? stats.totals.onTimeRate : stats.totals.completionRate)
+          }
           icon={<TargetIcon size={14} />}
           sub={
             isInterval
               ? `${stats.totals.lateCount} 次超时`
-              : bad
-                ? `${stats.totals.done} 守住 / ${stats.totals.missed} 破戒`
-                : `${stats.totals.done} 完成 / ${stats.totals.missed} 缺失`
+              : timeMode
+                ? project.targetTime
+                  ? `${stats.totals.onTimeCount} 准时 / ${stats.totals.lateCount} 迟到`
+                  : '未设准时目标'
+                : bad
+                  ? `${stats.totals.done} 守住 / ${stats.totals.missed} 破戒`
+                  : `${stats.totals.done} 完成 / ${stats.totals.missed} 缺失`
           }
         />
-        <StatTile
-          label={bad ? '破戒次数' : '总打卡'}
-          value={stats.totals.checkins}
-          icon={<CheckIcon size={14} />}
-          sub={bad ? `${stats.totals.activeDays} 个破戒日 · ${stats.totals.backfilled} 补卡` : `${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
-        />
+        {timeMode ? (
+          <StatTile
+            label="平均时间"
+            value={stats.totals.avgTime || '—'}
+            icon={<ClockIcon size={14} />}
+            sub={`${stats.totals.checkins} 次记录 · ${stats.totals.backfilled} 补卡`}
+          />
+        ) : (
+          <StatTile
+            label={bad ? '破戒次数' : '总打卡'}
+            value={stats.totals.checkins}
+            icon={<CheckIcon size={14} />}
+            sub={bad ? `${stats.totals.activeDays} 个破戒日 · ${stats.totals.backfilled} 补卡` : `${stats.totals.activeDays} 个活跃日 · ${stats.totals.backfilled} 补卡`}
+          />
+        )}
       </section>
+
+      <Achievements project={project} totals={stats.totals} summary={summary} />
 
       {project.prerequisites.length > 0 ? (
         <section className="detail-section panel chart-panel" aria-label="前置条件">
@@ -294,6 +331,9 @@ function DetailBody({ projectId }: { projectId: string }) {
       <footer className="detail-actions">
         <Button variant="soft" onClick={() => navigate(`#edit/${project.id}`)}>
           <PencilIcon size={15} /> 编辑
+        </Button>
+        <Button variant="ghost" pending={busy} onClick={() => void togglePin()}>
+          <PinIcon size={15} /> {project.pinned ? '取消置顶' : '置顶'}
         </Button>
         <Button variant="ghost" pending={busy} onClick={() => void toggleArchive()}>
           <ArchiveIcon size={15} /> {project.archived ? '恢复' : '归档'}
@@ -520,13 +560,20 @@ function HistoryList({
             {shown.map((record) => (
               <li key={record.id} className="record">
                 <span className="record-value">
-                  {formatValue(record.value)} {project.unit}
+                  {isTime(project)
+                    ? record.time !== undefined && record.time !== ''
+                      ? record.time
+                      : formatClock(record.checkedAt)
+                    : `${formatValue(record.value)} ${project.unit}`}
                 </span>
                 <span className="record-meta">
-                  {formatDayCN(record.localDate)} {formatClock(record.checkedAt)}
+                  {formatDayCN(record.localDate)}
+                  {isTime(project) ? '' : ` ${formatClock(record.checkedAt)}`}
                   {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                   {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
                 </span>
+                {isLate(project, record) ? <span className="rec-badge" data-kind="late">迟到</span> : null}
+                {record.hasPhoto ? <PhotoThumb checkinId={record.id} /> : null}
                 <RecordBadges backfilled={record.backfilled} violated={record.violated} />
                 <IconButton label="撤销这条记录" onClick={() => void onRemove(record.id)}>
                   <TrashIcon size={15} />
@@ -629,13 +676,19 @@ function DayPanel({
           {records.map((record) => (
             <li key={record.id} className="record">
               <span className="record-value">
-                {formatValue(record.value)} {project.unit}
+                {isTime(project)
+                  ? record.time !== undefined && record.time !== ''
+                    ? record.time
+                    : formatClock(record.checkedAt)
+                  : `${formatValue(record.value)} ${project.unit}`}
               </span>
               <span className="record-meta">
-                {formatClock(record.checkedAt)}
+                {isTime(project) ? '' : formatClock(record.checkedAt)}
                 {record.mood !== undefined && record.mood !== '' ? ` · ${record.mood}` : ''}
                 {record.note !== undefined && record.note !== '' ? ` · ${record.note}` : ''}
               </span>
+              {isLate(project, record) ? <span className="rec-badge" data-kind="late">迟到</span> : null}
+              {record.hasPhoto ? <PhotoThumb checkinId={record.id} /> : null}
               <RecordBadges backfilled={record.backfilled} violated={record.violated} />
               <IconButton label="撤销这条记录" onClick={() => void removeRecord(record.id)}>
                 <TrashIcon size={15} />

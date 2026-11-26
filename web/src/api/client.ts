@@ -250,6 +250,13 @@ export const api = {
   createCheckin: (projectId: string, input: CheckinInput): Promise<Checkin> =>
     request<Checkin>(`/projects/${enc(projectId)}/checkins`, { method: 'POST', body: input }),
 
+  /**
+   * Same-origin URL for a check-in's proof photo. Used directly as an <img>
+   * src: the session cookie rides along, and the server marks the bytes
+   * immutable so the browser caches them after the first view.
+   */
+  checkinPhotoUrl: (id: string): string => `${BASE_URL}/checkins/${enc(id)}/photo`,
+
   deleteCheckin: (id: string): Promise<void> =>
     request<void>(`/checkins/${enc(id)}`, { method: 'DELETE' }),
 

@@ -257,3 +257,75 @@ func TestNatureValidationAndNormalization(t *testing.T) {
 		t.Error("patch to bad on interval_hours accepted")
 	}
 }
+
+func TestLateForDeadline(t *testing.T) {
+	tests := []struct {
+		name     string
+		deadline string
+		clock    string
+		want     bool
+	}{
+		{"early same day", "23:00", "22:40", false},
+		{"exactly at the deadline", "23:00", "23:00", false},
+		{"one minute late", "23:00", "23:01", true},
+		{"after midnight for a bedtime deadline", "23:00", "00:10", true},
+		{"evening before an after-midnight deadline", "00:30", "23:40", false},
+		{"before an after-midnight deadline", "00:30", "00:20", false},
+		{"after an after-midnight deadline", "00:30", "00:40", true},
+		{"morning habit early", "08:00", "07:59", false},
+		{"morning habit late", "08:00", "08:01", true},
+		{"half a day after is late", "08:00", "20:00", true},
+		{"more than half a day after reads as next day", "08:00", "20:01", false},
+		{"empty deadline", "", "09:00", false},
+		{"empty clock", "09:00", "", false},
+		{"malformed clock", "09:00", "9:0", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LateForDeadline(tt.deadline, tt.clock); got != tt.want {
+				t.Errorf("LateForDeadline(%q, %q) = %v, want %v", tt.deadline, tt.clock, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodePhoto(t *testing.T) {
+	// One transparent 1x1 PNG, the smallest honest image for the round trip.
+	const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	mime, data, err := DecodePhoto(png)
+	if err != nil || mime != "image/png" || len(data) == 0 {
+		t.Fatalf("DecodePhoto(png) = %q, %d bytes, %v", mime, len(data), err)
+	}
+	for _, bad := range []string{
+		"",
+		"not-a-data-url",
+		"data:text/html;base64,PGgxPmhpPC9oMT4=",
+		"data:image/png;base64,***",
+		"data:image/png,",
+	} {
+		if _, _, err := DecodePhoto(bad); err == nil {
+			t.Errorf("DecodePhoto(%q) accepted a bad payload", bad)
+		}
+	}
+
+	// Check-in validation reports the photo field rather than failing opaquely.
+	in := CheckinInput{Value: 1, Photo: "data:text/html;base64,PGgxPmhpPC9oMT4="}
+	var problems ValidationErrors
+	if err := in.Validate("2026-11-21"); !errors.As(err, &problems) {
+		t.Fatalf("err = %v, want ValidationErrors", err)
+	}
+	found := false
+	for _, p := range problems {
+		if p.Field == "photo" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("problems %v do not mention photo", problems)
+	}
+
+	// Oversized payloads are rejected before storage.
+	if err := (CheckinInput{Value: 1, Photo: "data:image/png;base64," + strings.Repeat("A", MaxPhotoBytes)}).Validate("2026-11-21"); err == nil {
+		t.Error("oversized photo accepted")
+	}
+}

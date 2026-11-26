@@ -18,8 +18,18 @@ Chinese; it runs comfortably on a phone, a tablet or a desktop.
   streak counts the days you stayed clean, and lapses are tallied apart from
   achievements so the two never blur together.
 - **Schedules that fit real life.** Daily, chosen weekdays, weekly, monthly,
-  every N days or every N hours — as a simple tick or a measured goal (8 cups,
-  30 minutes, 5 km).
+  every N days or every N hours — as a simple tick, a measured goal (8 cups,
+  30 minutes, 5 km), or a recorded clock time.
+- **Time habits.** A time mode logs *when* something happened (bedtime, wake-up,
+  last meal) with an optional deadline like "asleep by 23:00", then reports
+  on-time rate, on-time count, late count and your average time. Deadlines may
+  cross midnight — "by 00:30" still treats 23:40 as early.
+- **Reminders and achievements.** An optional daily reminder per habit (in-app,
+  plus opt-in browser notifications), and milestone badges for streaks,
+  completed periods, check-in counts and punctuality.
+- **Pinned and photographed.** Pin a habit to the top of Today so the few that
+  matter stay in reach; attach a proof photo to any check-in and browse it from
+  the record history.
 - **Forgiving history.** Backfill a forgotten day, excuse a day without breaking
   a streak, undo a record. Browse years of history in the calendar, not just the
   last few weeks.

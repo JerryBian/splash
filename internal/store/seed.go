@@ -51,7 +51,7 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 		today string // "done", "partial", "pending" or "" (follow the schedule)
 	}
 	demos := []demoProject{
-		{in: ProjectInput{Name: "喝水", Description: "每天 8 杯水，少量多次。", Icon: "💧", Color: "blue", CategoryID: catIDs["健康"], Schedule: ScheduleDaily, Target: 8, Unit: "杯", StartDate: start}, today: "partial"},
+		{in: ProjectInput{Name: "喝水", Description: "每天 8 杯水，少量多次。", Icon: "💧", Color: "blue", CategoryID: catIDs["健康"], Schedule: ScheduleDaily, Target: 8, Unit: "杯", StartDate: start, Pinned: true}, today: "partial"},
 		{in: ProjectInput{Name: "冥想", Description: "10 分钟呼吸练习，开始一天。", Icon: "🧘", Color: "teal", CategoryID: catIDs["健康"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}, today: "done"},
 		{in: ProjectInput{Name: "晨跑", Description: "每周跑 3 次，每次 3 公里以上。", Icon: "🏃", Color: "green", CategoryID: catIDs["健康"], Schedule: ScheduleWeekly, Target: 3, Unit: "次", StartDate: start}},
 		{in: ProjectInput{Name: "力量训练", Description: "周一、三、五，推拉腿分化。", Icon: "🏋️", Color: "red", CategoryID: catIDs["健康"], Schedule: ScheduleWeekdays, Mode: ModeCheck, Target: 1, Unit: "次", Weekdays: []int{1, 3, 5}, StartDate: start}},
@@ -61,6 +61,7 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 		{in: ProjectInput{Name: "每周复盘", Description: "周日晚回顾本周，写三条收获。", Icon: "📝", Color: "orange", CategoryID: catIDs["学习"], Schedule: ScheduleWeekly, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 		{in: ProjectInput{Name: "记账", Description: "记录当天每一笔支出。", Icon: "💰", Color: "teal", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}, today: "pending"},
 		{in: ProjectInput{Name: "护肤", Description: "晚间护肤流程。", Icon: "🌙", Color: "pink", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
+		{in: ProjectInput{Name: "准时睡觉", Description: "记录每晚入睡时间，23:00 前算准时。", Icon: "😴", Color: "violet", CategoryID: catIDs["生活"], Schedule: ScheduleDaily, Mode: ModeTime, TargetTime: "23:00", ReminderTime: "22:30", StartDate: start}},
 		{in: ProjectInput{Name: "熬夜", Description: "23 点后还没睡就记一次；坚持早睡才是目标。", Icon: "🦉", Color: "indigo", CategoryID: catIDs["生活"], Nature: NatureBad, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 		{in: ProjectInput{Name: "刷短视频", Description: "坏习惯：先读完书才允许刷；没读就刷会记一次前置违规。", Icon: "📱", Color: "orange", CategoryID: catIDs["生活"], Nature: NatureBad, Schedule: ScheduleDaily, Mode: ModeCheck, Target: 1, Unit: "次", StartDate: start}},
 	}
@@ -102,14 +103,22 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	timeMode := map[uuid.UUID]bool{}
+	for _, p := range created {
+		timeMode[p.ID] = p.Mode == ModeTime
+	}
 	insertCheckin := func(pid uuid.UUID, date string, hour, minute int, value float64, note, mood string) error {
 		t, err := ParseDate(date)
 		if err != nil {
 			return err
 		}
 		now := time.Date(t.Year(), t.Month(), t.Day(), hour, minute, 0, 0, cst).UTC()
-		_, err = tx.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			uuid.NewV7().String(), pid.String(), value, note, mood, date, toMillis(now), 480, 0, toMillis(now))
+		clock := ""
+		if timeMode[pid] {
+			clock = fmt.Sprintf("%02d:%02d", hour, minute)
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			uuid.NewV7().String(), pid.String(), value, note, mood, clock, date, toMillis(now), 480, 0, toMillis(now), "")
 		return err
 	}
 	insertSkip := func(pid uuid.UUID, date, reason string) error {
@@ -127,6 +136,23 @@ func (d *DB) SeedDemo(ctx context.Context) (int, error) {
 			// A rare excuse day, never on the current day.
 			if !isToday && rng.Float64() < 0.03 {
 				if err := insertSkip(p.ID, date, "休息一天"); err != nil {
+					return 0, err
+				}
+				continue
+			}
+
+			// A time-mode habit logs one clock time per day (bedtime): mostly
+			// before the deadline, occasionally after, so punctuality analytics
+			// have something to show. Today stays unrecorded.
+			if p.Mode == ModeTime {
+				if isToday || rng.Float64() > 0.85 {
+					continue
+				}
+				hour := 22
+				if rng.Float64() < 0.3 {
+					hour = 23
+				}
+				if err := insertCheckin(p.ID, date, hour, rng.Intn(60), 1, pick(rng, notes, 0.2), pick(rng, moods, 0.3)); err != nil {
 					return 0, err
 				}
 				continue

@@ -4,17 +4,38 @@
  * nothing here re-derives streaks or periods, so the two ends cannot disagree.
  */
 
-import type { DayStatus, HeatCell, Project, ProjectMode, ProjectNature } from '../api/types'
+import type { DayStatus, HeatCell, Project, ProjectNature } from '../api/types'
 import { parseDay } from './date'
 
-/** Human label for the completion mode (orthogonal to the schedule). */
-export function modeLabel(mode: ProjectMode): string {
-  return mode === 'check' ? '打勾一次' : '累计数量'
+/** True when the project records a wall-clock time per check-in. */
+export function isTime(p: Pick<Project, 'mode'>): boolean {
+  return p.mode === 'time'
 }
 
-/** Human label for the nature (a habit to build vs a habit to break). */
-export function natureLabel(nature: ProjectNature): string {
-  return nature === 'bad' ? '坏习惯' : '好习惯'
+/** "HH:MM" as minutes since midnight, or null when the string is malformed. */
+export function clockMinutes(clock: string): number | null {
+  if (!/^\d{2}:\d{2}$/.test(clock)) return null
+  const hours = Number(clock.slice(0, 2))
+  const minutes = Number(clock.slice(3, 5))
+  if (hours > 23 || minutes > 59) return null
+  return hours * 60 + minutes
+}
+
+/**
+ * True when a time-mode record landed after the project's deadline.
+ *
+ * Mirrors store.LateForDeadline: the comparison is circular over a ±12h window
+ * around the deadline, not a same-day string compare. "Asleep by 00:30" logged
+ * at 23:40 is early (the bedtime run starts in the evening), while a 23:00
+ * deadline logged at 00:10 is late.
+ */
+export function isLate(p: Pick<Project, 'mode' | 'targetTime'>, c: { time?: string }): boolean {
+  if (p.mode !== 'time' || p.targetTime === '' || c.time === undefined || c.time === '') return false
+  const target = clockMinutes(p.targetTime)
+  const at = clockMinutes(c.time)
+  if (target === null || at === null) return false
+  const diff = (at - target + 24 * 60) % (24 * 60)
+  return diff > 0 && diff <= 12 * 60
 }
 
 /** True when the project tracks a habit to avoid rather than one to build. */

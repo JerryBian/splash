@@ -228,8 +228,10 @@ type Totals struct {
 	Missed         int     `json:"missed"`
 	Skipped        int     `json:"skipped"`
 	CompletionRate float64 `json:"completionRate"` // done / (done + missed); the clean rate for bad habits
-	OnTimeRate     float64 `json:"onTimeRate"`     // interval_hours only
-	LateCount      int     `json:"lateCount"`      // interval_hours only
+	OnTimeRate     float64 `json:"onTimeRate"`     // interval_hours and time mode
+	OnTimeCount    int     `json:"onTimeCount"`    // records inside the interval/deadline
+	LateCount      int     `json:"lateCount"`      // interval_hours and time mode
+	AvgTime        string  `json:"avgTime"`        // time mode: mean recorded clock time, "HH:MM"
 	Backfilled     int     `json:"backfilled"`     // check-ins recorded after their credited day
 	Violations     int     `json:"violations"`     // check-ins landed while a prerequisite was unmet
 }
@@ -266,7 +268,7 @@ type ProjectStats struct {
 
 // StatsInput carries everything BuildStats needs. Aggregates and Skips cover
 // the project's whole life; Checkins (ascending by CheckedAt) is only required
-// for interval_hours, whose streaks depend on instants rather than days.
+// for interval_hours streaks and for time-mode punctuality.
 type StatsInput struct {
 	Project    Project
 	Today      string
@@ -326,6 +328,12 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 		if agg.Count > 0 {
 			out.Totals.ActiveDays++
 		}
+	}
+	// Punctuality is a lifetime roll-up like the totals above and exists only
+	// for time mode. It is derived from the loaded history, never stored.
+	if p.Mode == ModeTime {
+		out.Totals.OnTimeRate, out.Totals.OnTimeCount, out.Totals.LateCount, out.Totals.AvgTime =
+			timeAnalytics(in.Checkins, p.TargetTime)
 	}
 
 	// Forward walk over every period from start to today. One pass yields the
@@ -433,6 +441,65 @@ func buildPeriodStats(in StatsInput) ProjectStats {
 	return out
 }
 
+// timeAnalytics derives punctuality for a time-mode habit: the share of records
+// at or before the deadline, how many were on time, how many late, and the mean
+// recorded clock time. With no deadline there is nothing to be late against, so
+// rate/onTime/late stay zero and only the average is meaningful.
+//
+// LateForDeadline compares on a 24h circle, so an "asleep by 00:30" habit logged
+// at 23:40 is early rather than eleven hours late.
+func timeAnalytics(checkins []Checkin, target string) (rate float64, onTime, late int, avg string) {
+	hasDeadline := ClockMinutes(target) >= 0
+	minutes := make([]int, 0, len(checkins))
+	for _, c := range checkins {
+		m := ClockMinutes(c.Time)
+		if m < 0 {
+			continue
+		}
+		minutes = append(minutes, m)
+		if hasDeadline {
+			if LateForDeadline(target, c.Time) {
+				late++
+			} else {
+				onTime++
+			}
+		}
+	}
+	if len(minutes) == 0 {
+		return 0, 0, 0, ""
+	}
+	avg = circularMeanClock(minutes)
+	if hasDeadline {
+		rate = float64(onTime) / float64(len(minutes))
+	}
+	return rate, onTime, late, avg
+}
+
+// circularMeanClock averages clock times on the 24-hour circle, not as plain
+// numbers: bedtimes of 23:50 and 00:10 average to 00:00, which is the useful
+// answer, while an arithmetic mean would claim 12:00. Samples spread evenly
+// around the circle have no meaningful mean, so it reports "".
+func circularMeanClock(minutes []int) string {
+	if len(minutes) == 0 {
+		return ""
+	}
+	var sin, cos float64
+	for _, m := range minutes {
+		angle := 2 * math.Pi * float64(m) / (24 * 60)
+		sin += math.Sin(angle)
+		cos += math.Cos(angle)
+	}
+	n := float64(len(minutes))
+	if math.Hypot(sin, cos)/n < 1e-6 {
+		return ""
+	}
+	angle := math.Atan2(sin, cos)
+	if angle < 0 {
+		angle += 2 * math.Pi
+	}
+	return MinutesClock(int(math.Round(angle / (2 * math.Pi) * (24 * 60))))
+}
+
 func buildIntervalStats(in StatsInput) ProjectStats {
 	p := in.Project
 	out := ProjectStats{}
@@ -471,6 +538,7 @@ func buildIntervalStats(in StatsInput) ProjectStats {
 		prev = c.CheckedAt
 	}
 	out.Totals.OnTimeRate = rate(onTime, len(in.Checkins))
+	out.Totals.OnTimeCount = onTime
 	out.Totals.LateCount = late
 
 	// Day-level verdicts for totals and heatmap: a day "done" met the expected

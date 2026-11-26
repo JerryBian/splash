@@ -29,7 +29,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-const schemaVersion = 3
+const schemaVersion = 5
 
 // migration2 adds the completion mode, the backfill marker and the
 // prerequisite graph. Existing single-tick projects (target <= 1) become
@@ -52,6 +52,24 @@ CREATE TABLE IF NOT EXISTS prerequisites (
 const migration3SQL = `
 ALTER TABLE projects DROP COLUMN private;
 ALTER TABLE projects ADD COLUMN nature TEXT NOT NULL DEFAULT 'good';
+`
+
+// migration4 adds the time-of-day mode and reminders: a punctuality deadline
+// and a daily nudge on projects, and the recorded wall-clock time on check-ins.
+// Existing rows default to empty (no deadline / no reminder / no time), so
+// check and value habits are untouched.
+const migration4SQL = `
+ALTER TABLE projects ADD COLUMN target_time TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN reminder_time TEXT NOT NULL DEFAULT '';
+ALTER TABLE checkins ADD COLUMN time TEXT NOT NULL DEFAULT '';
+`
+
+// migration5 adds pinning and proof photos. Pinned floats a project to the top
+// of the Today page; photo is an optional image data URL on a check-in. Both
+// default to off/empty, so existing rows keep their behaviour and size.
+const migration5SQL = `
+ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE checkins ADD COLUMN photo TEXT NOT NULL DEFAULT '';
 `
 
 // DB is the SQLite-backed store. One connection is deliberate: SQLite writes
@@ -159,6 +177,16 @@ func (d *DB) migrate(ctx context.Context) error {
 	if version < 3 {
 		if _, err := d.sql.ExecContext(ctx, migration3SQL); err != nil {
 			return fmt.Errorf("store: apply schema v3: %w", err)
+		}
+	}
+	if version < 4 {
+		if _, err := d.sql.ExecContext(ctx, migration4SQL); err != nil {
+			return fmt.Errorf("store: apply schema v4: %w", err)
+		}
+	}
+	if version < 5 {
+		if _, err := d.sql.ExecContext(ctx, migration5SQL); err != nil {
+			return fmt.Errorf("store: apply schema v5: %w", err)
 		}
 	}
 	if _, err := d.sql.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {

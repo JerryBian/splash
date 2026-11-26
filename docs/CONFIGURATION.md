@@ -16,7 +16,7 @@ manager, `docker run -e`, or your orchestrator.
 | `SPLASH_WRITE_TIMEOUT`          | `30s`            | Response write timeout                                         |
 | `SPLASH_IDLE_TIMEOUT`           | `90s`            | Keep-alive idle timeout                                        |
 | `SPLASH_SHUTDOWN_TIMEOUT`       | `20s`            | Grace period for in-flight requests during a restart           |
-| `SPLASH_MAX_REQUEST_BODY_BYTES` | `1048576`        | Hard cap 32 MiB                                                |
+| `SPLASH_MAX_REQUEST_BODY_BYTES` | `1048576`        | Hard cap 32 MiB; `/import` always uses the hard cap            |
 | `SPLASH_LOG_FORMAT`             | `text`           | `text` or `json`; production defaults to `json`                |
 | `SPLASH_LOG_LEVEL`              | `info`           | `debug`, `info`, `warn`, `error`                               |
 | `SPLASH_LOG_FILE`               | *(unset)*        | Extra JSON log sink                                            |

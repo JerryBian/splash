@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { AppProvider } from '../hooks/useApp'
@@ -137,8 +137,25 @@ describe('TodayView', () => {
     expect(callTo(fetchMock, '/checkins', 'POST')).toBeUndefined()
   })
 
-  it('invites the admin to create the first project when empty', () => {
-    stubFetch(refreshRoutes([]))
+  it('floats pinned projects into their own group, exactly once', () => {
+    const pinned = makeProject({ id: 'p-pin', name: '喝水', icon: '💧', pinned: true })
+    const normal = makeProject({ id: 'p-normal', name: '冥想' })
+    stubFetch(refreshRoutes([pinned, normal]))
+    render(
+      <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [pinned, normal] })}>
+        <TodayView />
+      </AppProvider>,
+    )
+
+    const pinnedGroup = screen.getByRole('region', { name: '置顶' })
+    expect(within(pinnedGroup).getByText('喝水')).toBeInTheDocument()
+    expect(within(pinnedGroup).queryByText('冥想')).toBeNull()
+    // The pinned card left its category group rather than being copied there.
+    expect(screen.getAllByText('喝水')).toHaveLength(1)
+    expect(screen.getByText('冥想')).toBeInTheDocument()
+  })
+
+  it('invites the admin to create the first project when empty', () => {    stubFetch(refreshRoutes([]))
     render(
       <AppProvider initial={makeBootstrap({ session: { role: 'admin', username: 'admin' }, projects: [], overview: makeOverview({ today: { date: TEST_TODAY, total: 0, done: 0, pending: 0, skipped: 0, due: 0, slipped: 0 }, totals: { checkins: 0, activeProjects: 0, bestStreak: 0, monthCheckins: 0, slips: 0, monthSlips: 0 } }) })}>
         <TodayView />

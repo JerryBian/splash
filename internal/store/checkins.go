@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +16,8 @@ type CheckinStore interface {
 	Get(ctx context.Context, id uuid.UUID) (Checkin, error)
 	List(ctx context.Context, q CheckinQuery) ([]Checkin, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	// Photo returns the proof photo's data URL; ErrNotFound when there is none.
+	Photo(ctx context.Context, id uuid.UUID) (string, error)
 	// Aggregates rolls check-ins up by calendar day, the input to BuildStats.
 	Aggregates(ctx context.Context, projectID uuid.UUID, from, to string) (map[string]DayAggregate, error)
 	// AllAsc returns the full history in instant order, for interval_hours.
@@ -25,7 +29,14 @@ type Checkins struct{ db *DB }
 
 var _ CheckinStore = (*Checkins)(nil)
 
-const checkinColumns = `id, project_id, value, note, mood, local_date, checked_at, tz_offset, backfilled, created_at`
+// checkinColumns is the writable column set shared by INSERT and SELECT. The
+// photo payload is deliberately absent: it is written explicitly on create and
+// only read by the photo endpoint and a backup dump.
+const checkinColumns = `id, project_id, value, note, mood, time, local_date, checked_at, tz_offset, backfilled, created_at`
+
+// checkinSelect adds the derived has-photo flag. length() is answered from the
+// record header, so a history page never pulls the base64 payload along.
+const checkinSelect = checkinColumns + `, length(photo) > 0`
 
 // Create records a check-in. The project must exist; the date defaults to the
 // client's today (now + reported offset) and may be in the past (a backfill),
@@ -51,8 +62,17 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 	backfilled := date != clientToday
 
 	value := n.Value
-	if proj.Mode == ModeCheck {
-		value = 1 // one tick completes the period; quantity is meaningless
+	if proj.Mode == ModeCheck || proj.Mode == ModeTime {
+		value = 1 // one record completes the period; quantity is meaningless
+	}
+	// A time-mode record carries a wall-clock time; when the client sends none
+	// (a quick tap), default to the client's current local time.
+	clock := strings.TrimSpace(n.Time)
+	if proj.Mode == ModeTime && clock == "" {
+		clock = now.Add(time.Duration(n.TZOffset) * time.Minute).Format("15:04")
+	}
+	if proj.Mode != ModeTime {
+		clock = ""
 	}
 	checkedAt := now
 	if backfilled {
@@ -67,19 +87,23 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 		Value:      value,
 		Note:       n.Note,
 		Mood:       n.Mood,
+		Time:       clock,
+		Photo:      n.Photo,
+		HasPhoto:   n.Photo != "",
 		LocalDate:  date,
 		CheckedAt:  checkedAt,
 		TZOffset:   n.TZOffset,
 		Backfilled: backfilled,
 		CreatedAt:  now,
 	}
-	_, err = s.db.sql.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.LocalDate,
-		toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt))
+	_, err = s.db.sql.ExecContext(ctx, `INSERT INTO checkins (`+checkinColumns+`, photo)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.Time, c.LocalDate,
+		toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt), c.Photo)
 	if err != nil {
 		return Checkin{}, fmt.Errorf("create checkin: %w", err)
 	}
+	c.Photo = "" // the response ships the flag, not the payload
 	// Carry the derived prerequisite verdict on the create response too, so
 	// the UI can flag a violation immediately.
 	one := []Checkin{c}
@@ -91,12 +115,30 @@ func (s *Checkins) Create(ctx context.Context, projectID uuid.UUID, in CheckinIn
 
 // Get returns one check-in, or ErrNotFound.
 func (s *Checkins) Get(ctx context.Context, id uuid.UUID) (Checkin, error) {
-	row := s.db.sql.QueryRowContext(ctx, `SELECT `+checkinColumns+` FROM checkins WHERE id = ?`, id.String())
+	row := s.db.sql.QueryRowContext(ctx, `SELECT `+checkinSelect+` FROM checkins WHERE id = ?`, id.String())
 	c, err := scanCheckin(row)
 	if err != nil {
 		return Checkin{}, fmt.Errorf("get checkin %s: %w", id, errNoRows(err, "checkin "+id.String()))
 	}
 	return c, nil
+}
+
+// Photo returns the proof photo's data URL, or ErrNotFound when the check-in
+// does not exist or has no photo. The payload is read on demand only, so list
+// and stats responses stay small even with hundreds of pictures stored.
+func (s *Checkins) Photo(ctx context.Context, id uuid.UUID) (string, error) {
+	var photo string
+	err := s.db.sql.QueryRowContext(ctx, `SELECT photo FROM checkins WHERE id = ?`, id.String()).Scan(&photo)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%w: checkin %s", ErrNotFound, id)
+	}
+	if err != nil {
+		return "", fmt.Errorf("get checkin photo %s: %w", id, err)
+	}
+	if photo == "" {
+		return "", fmt.Errorf("%w: checkin %s has no photo", ErrNotFound, id)
+	}
+	return photo, nil
 }
 
 // List returns one page of history, newest first.
@@ -114,7 +156,7 @@ func (s *Checkins) List(ctx context.Context, q CheckinQuery) ([]Checkin, error) 
 	}
 	args = append(args, q.Limit)
 	rows, err := s.db.sql.QueryContext(ctx,
-		`SELECT `+checkinColumns+` FROM checkins WHERE `+strings.Join(where, " AND ")+
+		`SELECT `+checkinSelect+` FROM checkins WHERE `+strings.Join(where, " AND ")+
 			` ORDER BY checked_at DESC, id DESC LIMIT ?`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list checkins: %w", err)
@@ -184,7 +226,7 @@ func (s *Checkins) Aggregates(ctx context.Context, projectID uuid.UUID, from, to
 // AllAsc returns the full history ordered by instant, for interval streaks.
 func (s *Checkins) AllAsc(ctx context.Context, projectID uuid.UUID) ([]Checkin, error) {
 	rows, err := s.db.sql.QueryContext(ctx,
-		`SELECT `+checkinColumns+` FROM checkins WHERE project_id = ? ORDER BY checked_at, id`, projectID.String())
+		`SELECT `+checkinSelect+` FROM checkins WHERE project_id = ? ORDER BY checked_at, id`, projectID.String())
 	if err != nil {
 		return nil, fmt.Errorf("list checkins asc: %w", err)
 	}
@@ -204,15 +246,16 @@ func scanCheckin(row rowScanner) (Checkin, error) {
 	var c Checkin
 	var id, projectID string
 	var checkedAt, createdAt int64
-	var backfilled int
-	if err := row.Scan(&id, &projectID, &c.Value, &c.Note, &c.Mood, &c.LocalDate,
-		&checkedAt, &c.TZOffset, &backfilled, &createdAt); err != nil {
+	var backfilled, hasPhoto int
+	if err := row.Scan(&id, &projectID, &c.Value, &c.Note, &c.Mood, &c.Time, &c.LocalDate,
+		&checkedAt, &c.TZOffset, &backfilled, &createdAt, &hasPhoto); err != nil {
 		return Checkin{}, err
 	}
 	c.ID, _ = uuid.Parse(id)
 	c.ProjectID, _ = uuid.Parse(projectID)
 	c.CheckedAt = fromMillis(checkedAt)
 	c.Backfilled = backfilled != 0
+	c.HasPhoto = hasPhoto != 0
 	c.CreatedAt = fromMillis(createdAt)
 	return c, nil
 }

@@ -111,7 +111,7 @@ func (s *Stats) ForProject(ctx context.Context, p Project, today string, weeks i
 		return ProjectStats{}, err
 	}
 	var checkins []Checkin
-	if p.Schedule == ScheduleIntervalHours {
+	if p.Schedule == ScheduleIntervalHours || p.Mode == ModeTime {
 		checkins, err = s.db.Checkins().AllAsc(ctx, p.ID)
 		if err != nil {
 			return ProjectStats{}, err
@@ -363,7 +363,7 @@ func (d *DB) Dump(ctx context.Context) (ExportData, error) {
 		return ExportData{}, err
 	}
 
-	rows, err := d.sql.QueryContext(ctx, `SELECT `+checkinColumns+` FROM checkins ORDER BY checked_at, id`)
+	rows, err := d.sql.QueryContext(ctx, `SELECT `+checkinSelect+` FROM checkins ORDER BY checked_at, id`)
 	if err != nil {
 		return ExportData{}, fmt.Errorf("dump checkins: %w", err)
 	}
@@ -379,6 +379,30 @@ func (d *DB) Dump(ctx context.Context) (ExportData, error) {
 	_ = rows.Close()
 	if err := rows.Err(); err != nil {
 		return ExportData{}, fmt.Errorf("dump checkins: %w", err)
+	}
+
+	// Photos travel in the backup but not in bulk API reads. Load them in one
+	// pass and attach them by id rather than selecting the payload for every
+	// row (a 400 KB text column would dominate the dump's memory profile).
+	photoRows, err := d.sql.QueryContext(ctx, `SELECT id, photo FROM checkins WHERE length(photo) > 0`)
+	if err != nil {
+		return ExportData{}, fmt.Errorf("dump photos: %w", err)
+	}
+	photos := map[string]string{}
+	for photoRows.Next() {
+		var id, photo string
+		if err := photoRows.Scan(&id, &photo); err != nil {
+			_ = photoRows.Close()
+			return ExportData{}, fmt.Errorf("dump photos: %w", err)
+		}
+		photos[id] = photo
+	}
+	_ = photoRows.Close()
+	if err := photoRows.Err(); err != nil {
+		return ExportData{}, fmt.Errorf("dump photos: %w", err)
+	}
+	for i := range out.Checkins {
+		out.Checkins[i].Photo = photos[out.Checkins[i].ID.String()]
 	}
 
 	skipRows, err := d.sql.QueryContext(ctx, `SELECT id, project_id, skip_date, reason, created_at FROM skips ORDER BY skip_date`)

@@ -429,6 +429,51 @@ func TestDumpExportsEverything(t *testing.T) {
 	}
 }
 
+func TestTimeModeRecordsAndPunctuality(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	p := mustProject(t, db, ProjectInput{
+		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeTime, TargetTime: "23:00", StartDate: "2026-11-18",
+	})
+	if p.Mode != ModeTime || p.Target != 1 || p.TargetTime != "23:00" {
+		t.Fatalf("time project = %+v", p)
+	}
+	if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: "22:40", Date: "2026-11-19"}); err != nil {
+		t.Fatalf("on-time record: %v", err)
+	}
+	if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: "23:30", Date: "2026-11-20"}); err != nil {
+		t.Fatalf("late record: %v", err)
+	}
+	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Totals.OnTimeRate != 0.5 || stats.Totals.LateCount != 1 {
+		t.Errorf("punctuality = rate %v late %d, want 0.5 / 1", stats.Totals.OnTimeRate, stats.Totals.LateCount)
+	}
+	if stats.Totals.OnTimeCount != 1 {
+		t.Errorf("onTimeCount = %d, want 1", stats.Totals.OnTimeCount)
+	}
+	if stats.Totals.AvgTime != "23:05" {
+		t.Errorf("avgTime = %q, want 23:05", stats.Totals.AvgTime)
+	}
+	// Both days recorded complete their periods (time mode completes on a record).
+	if stats.Totals.Done != 2 {
+		t.Errorf("done = %d, want 2", stats.Totals.Done)
+	}
+	// A malformed clock is a field problem.
+	if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: "25:00"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("bad clock: err = %v, want ErrValidation", err)
+	}
+	// time mode cannot pair with interval_hours or a bad nature.
+	if _, err := db.Projects().Create(ctx, ProjectInput{Name: "x", Schedule: ScheduleIntervalHours, Interval: 2, Mode: ModeTime, StartDate: "2026-11-01"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("time+interval_hours: err = %v, want ErrValidation", err)
+	}
+	if _, err := db.Projects().Create(ctx, ProjectInput{Name: "x", Schedule: ScheduleDaily, Mode: ModeTime, Nature: NatureBad, StartDate: "2026-11-01"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("time+bad: err = %v, want ErrValidation", err)
+	}
+}
+
 func TestImportRestoresExportAdditively(t *testing.T) {
 	ctx := context.Background()
 	src := openTestDB(t)
@@ -482,5 +527,205 @@ func TestImportRejectsDanglingReferences(t *testing.T) {
 	n, _ := dst.Checkins().Aggregates(ctx, uuid.NewV7(), "", "")
 	if len(n) != 0 {
 		t.Error("a rejected import left rows behind")
+	}
+}
+
+func TestTimeModeOvernightDeadline(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	// "Asleep by 00:30": 23:40 is the previous evening and therefore on time;
+	// 00:40 is late. A same-day string compare would invert both verdicts.
+	p := mustProject(t, db, ProjectInput{
+		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeTime, TargetTime: "00:30", StartDate: "2026-11-18",
+	})
+	for _, in := range []CheckinInput{
+		{Value: 1, Time: "23:40", Date: "2026-11-19"},
+		{Value: 1, Time: "00:40", Date: "2026-11-20"},
+	} {
+		if _, err := db.Checkins().Create(ctx, p.ID, in); err != nil {
+			t.Fatalf("record %s: %v", in.Time, err)
+		}
+	}
+	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Totals.OnTimeCount != 1 || stats.Totals.LateCount != 1 || stats.Totals.OnTimeRate != 0.5 {
+		t.Errorf("punctuality = %d on time / %d late / rate %v, want 1 / 1 / 0.5",
+			stats.Totals.OnTimeCount, stats.Totals.LateCount, stats.Totals.OnTimeRate)
+	}
+	// 23:40 and 00:40 average around midnight, not to a same-day 12:10.
+	if stats.Totals.AvgTime != "00:10" {
+		t.Errorf("avgTime = %q, want 00:10", stats.Totals.AvgTime)
+	}
+}
+
+func TestTimeModeAverageWrapsMidnight(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	p := mustProject(t, db, ProjectInput{
+		Name: "Sleep", Schedule: ScheduleDaily, Mode: ModeTime, StartDate: "2026-11-18",
+	})
+	for i, clock := range []string{"23:50", "00:10"} {
+		day := AddDays("2026-11-19", i)
+		if _, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Time: clock, Date: day}); err != nil {
+			t.Fatalf("record %s: %v", clock, err)
+		}
+	}
+	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Totals.AvgTime != "00:00" {
+		t.Errorf("avgTime = %q, want 00:00 (circular mean)", stats.Totals.AvgTime)
+	}
+	// Exactly opposite clocks have no meaningful circular mean.
+	if got := circularMeanClock([]int{8 * 60, 20 * 60}); got != "" {
+		t.Errorf("circularMeanClock(opposites) = %q, want empty", got)
+	}
+}
+
+func TestPinnedRoundTrip(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	p := mustProject(t, db, ProjectInput{
+		Name: "Water", Schedule: ScheduleDaily, Mode: ModeCheck, Pinned: true, StartDate: "2026-11-01",
+	})
+	if !p.Pinned {
+		t.Fatal("created project is not pinned")
+	}
+	got, err := db.Projects().Get(ctx, p.ID)
+	if err != nil || !got.Pinned {
+		t.Fatalf("get = %+v, err = %v; want pinned", got, err)
+	}
+	off := false
+	updated, err := db.Projects().Update(ctx, p.ID, ProjectPatch{Pinned: &off}, &p.Version)
+	if err != nil {
+		t.Fatalf("unpin: %v", err)
+	}
+	if updated.Pinned || updated.Version != p.Version+1 {
+		t.Errorf("updated = pinned %v version %d", updated.Pinned, updated.Version)
+	}
+	// A full backup carries the pin; import into a clean database keeps it.
+	pinned := true
+	if _, err := db.Projects().Update(ctx, p.ID, ProjectPatch{Pinned: &pinned}, &updated.Version); err != nil {
+		t.Fatalf("repin: %v", err)
+	}
+	data, err := db.Dump(ctx)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	dest := openTestDB(t)
+	if _, err := dest.Import(ctx, data); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	restored, err := dest.Projects().Get(ctx, p.ID)
+	if err != nil || !restored.Pinned {
+		t.Fatalf("restored = %+v, err = %v; want pinned", restored, err)
+	}
+}
+
+func TestCheckinPhotoRoundTrip(t *testing.T) {
+	const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	db := openTestDB(t)
+	ctx := context.Background()
+	p := mustProject(t, db, ProjectInput{Name: "Proof", Schedule: ScheduleDaily, Mode: ModeCheck, StartDate: "2026-11-01"})
+
+	c, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1, Photo: png})
+	if err != nil {
+		t.Fatalf("create with photo: %v", err)
+	}
+	if !c.HasPhoto || c.Photo != "" {
+		t.Errorf("create response = hasPhoto %v photo len %d; want true / payload omitted", c.HasPhoto, len(c.Photo))
+	}
+	stored, err := db.Checkins().Photo(ctx, c.ID)
+	if err != nil || stored != png {
+		t.Fatalf("photo = %d bytes, err = %v; want the original data URL", len(stored), err)
+	}
+	// List responses carry the flag only.
+	list, err := db.Checkins().List(ctx, CheckinQuery{ProjectID: p.ID})
+	if err != nil || len(list) != 1 || !list[0].HasPhoto || list[0].Photo != "" {
+		t.Fatalf("list = %+v, err = %v", list, err)
+	}
+	// Recent/statistics responses are likewise payload-free.
+	stats, err := db.Stats().ForProject(ctx, p, "2026-11-21", 0)
+	if err != nil || len(stats.Recent) != 1 || !stats.Recent[0].HasPhoto || stats.Recent[0].Photo != "" {
+		t.Fatalf("stats recent = %+v, err = %v", stats.Recent, err)
+	}
+
+	// The backup restores the picture into a clean database.
+	data, err := db.Dump(ctx)
+	if err != nil {
+		t.Fatalf("dump: %v", err)
+	}
+	if len(data.Checkins) != 1 || data.Checkins[0].Photo != png {
+		t.Fatalf("dump checkin photo = %d bytes, want %d", len(data.Checkins[0].Photo), len(png))
+	}
+	dest := openTestDB(t)
+	if _, err := dest.Import(ctx, data); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	restored, err := dest.Checkins().Photo(ctx, c.ID)
+	if err != nil || restored != png {
+		t.Fatalf("restored photo = %d bytes, err = %v", len(restored), err)
+	}
+
+	// A check-in without a photo, and a deleted one, answer ErrNotFound.
+	plain, err := db.Checkins().Create(ctx, p.ID, CheckinInput{Value: 1})
+	if err != nil {
+		t.Fatalf("create plain: %v", err)
+	}
+	if _, err := db.Checkins().Photo(ctx, plain.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("plain photo: err = %v, want ErrNotFound", err)
+	}
+	if err := db.Checkins().Delete(ctx, c.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := db.Checkins().Photo(ctx, c.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted photo: err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestMigrateFromV4AddsPinAndPhoto(t *testing.T) {
+	// Simulate a database that ran migration 4 but not 5: strip the newer
+	// columns and stamp the old version, then let Open upgrade it. This is the
+	// path a real deployment takes, not just the fresh-database path above.
+	path := filepath.Join(t.TempDir(), "v4.db")
+	db, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := db.sql.Exec(`
+		ALTER TABLE projects DROP COLUMN pinned;
+		ALTER TABLE checkins DROP COLUMN photo;
+		PRAGMA user_version = 4;
+	`); err != nil {
+		_ = db.Close()
+		t.Fatalf("shape v4 database: %v", err)
+	}
+	_ = db.Close()
+
+	db2, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("reopen at v4: %v", err)
+	}
+	defer func() { _ = db2.Close() }()
+	var version int
+	if err := db2.sql.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("user_version: %v", err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", version, schemaVersion)
+	}
+	const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	p := mustProject(t, db2, ProjectInput{
+		Name: "Upgraded", Schedule: ScheduleDaily, Mode: ModeCheck, Pinned: true, StartDate: "2026-11-01",
+	})
+	if !p.Pinned {
+		t.Error("pinned did not survive the upgrade")
+	}
+	c, err := db2.Checkins().Create(context.Background(), p.ID, CheckinInput{Value: 1, Photo: png})
+	if err != nil || !c.HasPhoto {
+		t.Errorf("photo checkin after upgrade = %+v, err = %v", c, err)
 	}
 }

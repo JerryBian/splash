@@ -24,6 +24,7 @@ const UNIT_SUGGESTIONS = ['次', '杯', '分钟', '公里', '个', '页', '小�
 const MODE_OPTIONS: { value: ProjectMode; label: string }[] = [
   { value: 'check', label: '打勾一次' },
   { value: 'value', label: '累计数量' },
+  { value: 'time', label: '记录时间' },
 ]
 
 const NATURE_OPTIONS: { value: ProjectNature; label: string }[] = [
@@ -71,6 +72,8 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   const [unit, setUnit] = useState(existing?.unit ?? '次')
   const [weekdays, setWeekdays] = useState<number[]>(existing?.weekdays ?? [1, 3, 5])
   const [interval, setInterval] = useState(existing !== undefined && existing.interval > 0 ? String(existing.interval) : '2')
+  const [targetTime, setTargetTime] = useState(existing?.targetTime ?? '')
+  const [reminderTime, setReminderTime] = useState(existing?.reminderTime ?? '')
   // Default to the server's day, not the device clock: the two can differ
   // around midnight/timezones, and a start date past the server's today would
   // make the native date input invalid and silently block submit.
@@ -84,13 +87,17 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
   useSessionHeartbeat(true)
 
   const bad = nature === 'bad'
-  // A bad habit has no "check in every N hours" obligation, so that family is
-  // not offered; the rest of the cadences still describe when to avoid it.
-  // Memoized (and kept above the early return) so the hook order is stable and
-  // the Segmented prop keeps a stable identity across renders.
+  const timeMode = mode === 'time'
+  // Neither a bad habit nor a time-mode habit has a "check in every N hours"
+  // obligation, so that family is not offered for them. Memoized (and kept
+  // above the early return) so the hook order is stable and the Segmented prop
+  // keeps a stable identity across renders.
   const scheduleOptions = useMemo(
-    () => (bad ? SCHEDULE_OPTIONS.filter((o) => o.value !== 'interval_hours') : SCHEDULE_OPTIONS),
-    [bad],
+    () =>
+      bad || timeMode
+        ? SCHEDULE_OPTIONS.filter((o) => o.value !== 'interval_hours')
+        : SCHEDULE_OPTIONS,
+    [bad, timeMode],
   )
 
   if (projectId !== 'new' && existing === undefined) {
@@ -113,6 +120,12 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
       setMode('check')
       if (schedule === 'interval_hours') setSchedule('daily')
     }
+  }
+
+  const chooseMode = (next: ProjectMode) => {
+    setMode(next)
+    // A clock-time record has no meaning on a rolling countdown.
+    if (next === 'time' && schedule === 'interval_hours') setSchedule('daily')
   }
 
   const validate = (): Record<string, string> => {
@@ -154,6 +167,8 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
       unit: bad ? '次' : unit.trim() === '' ? '次' : unit.trim(),
       weekdays: needsWeekdays ? weekdays : [],
       interval: isIntervalHours || isIntervalDays ? Number(interval) : 0,
+      targetTime: !bad && timeMode ? targetTime : '',
+      reminderTime,
       startDate,
       prerequisites,
     }
@@ -247,10 +262,25 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
         {bad ? (
           <p className="sheet-note">坏习惯按「打勾一次」记录是否发生，无需目标数量；每N小时倒计时不适用。</p>
         ) : (
-          <Field label="完成方式" hint={mode === 'check' ? '每天打一次勾即完成，「30 分钟」等写在说明里' : '累计数量达到目标才算完成'}>
-            <Segmented options={MODE_OPTIONS} value={mode} onChange={setMode} ariaLabel="完成方式" />
+          <Field
+            label="完成方式"
+            hint={
+              mode === 'check'
+                ? '每天打一次勾即完成，「30 分钟」等写在说明里'
+                : mode === 'time'
+                  ? '每次打卡记录一个时间点（如入睡时间），可设准时目标'
+                  : '累计数量达到目标才算完成'
+            }
+          >
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={chooseMode} ariaLabel="完成方式" />
           </Field>
         )}
+
+        {!bad && timeMode ? (
+          <Field label="准时目标（可选）" htmlFor="p-target-time" error={errors['targetTime']} hint="如 23:00 前睡觉；留空则只记录时间。跨午夜的截止时间（如 00:30）按夜间时段判断">
+            <Input id="p-target-time" type="time" value={targetTime} onChange={(event) => setTargetTime(event.target.value)} />
+          </Field>
+        ) : null}
 
         <Field label="前置条件（可选）" error={errors['prerequisites']} hint="选了的项目必须当天先完成，本项目才解锁；可多选、可链式，服务器会拒绝成环">
           <div className="chip-row prereq-picker" role="group" aria-label="前置条件">
@@ -317,6 +347,10 @@ export function ProjectEditor({ projectId }: { projectId: string }) {
 
         <Field label="开始日期" htmlFor="p-start" error={errors['startDate']} hint="统计与连续记录从这一天算起">
           <Input id="p-start" type="date" value={startDate} max={today} min="2000-01-01" onChange={(event) => setStartDate(event.target.value)} />
+        </Field>
+
+        <Field label="每日提醒（可选）" htmlFor="p-reminder" error={errors['reminderTime']} hint="应用开着时到点提醒；可在「我的」里开启浏览器通知，切到后台也能收到">
+          <Input id="p-reminder" type="time" value={reminderTime} onChange={(event) => setReminderTime(event.target.value)} />
         </Field>
 
         {existing !== undefined ? (

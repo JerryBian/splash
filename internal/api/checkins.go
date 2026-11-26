@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,8 @@ type checkin struct {
 	Value      float64  `json:"value"`
 	Note       string   `json:"note,omitempty"`
 	Mood       string   `json:"mood,omitempty"`
+	Time       string   `json:"time,omitempty"`
+	HasPhoto   bool     `json:"hasPhoto"`
 	LocalDate  string   `json:"localDate"`
 	CheckedAt  string   `json:"checkedAt"`
 	TZOffset   int      `json:"tzOffset"`
@@ -37,6 +40,8 @@ func toCheckin(c store.Checkin) checkin {
 		Value:      c.Value,
 		Note:       c.Note,
 		Mood:       c.Mood,
+		Time:       c.Time,
+		HasPhoto:   c.HasPhoto,
 		LocalDate:  c.LocalDate,
 		CheckedAt:  formatTime(c.CheckedAt),
 		TZOffset:   c.TZOffset,
@@ -48,11 +53,14 @@ func toCheckin(c store.Checkin) checkin {
 }
 
 // checkinRequest is the POST body. date empty means today; a past date is a
-// backfill. value is in the project's unit.
+// backfill. value is in the project's unit. photo is an optional image data URL
+// (400 KB cap), never echoed back in bulk responses.
 type checkinRequest struct {
 	Value    float64 `json:"value"`
 	Note     string  `json:"note"`
 	Mood     string  `json:"mood"`
+	Time     string  `json:"time"`
+	Photo    string  `json:"photo"`
 	Date     string  `json:"date"`
 	TZOffset int     `json:"tzOffset"`
 }
@@ -72,6 +80,8 @@ func (a *API) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 		Value:    req.Value,
 		Note:     req.Note,
 		Mood:     req.Mood,
+		Time:     req.Time,
+		Photo:    req.Photo,
 		Date:     req.Date,
 		TZOffset: req.TZOffset,
 	})
@@ -141,6 +151,35 @@ func (a *API) handleDeleteCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCheckinPhoto serves GET /api/v1/checkins/{id}/photo (admin): the
+// proof photo's raw bytes. The payload is deliberately not embedded in any list
+// response — a page of history would otherwise carry megabytes of base64 — so
+// the UI points an <img> at this URL and the browser caches the immutable image.
+func (a *API) handleCheckinPhoto(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUUID(r.PathValue("id"), "checkin id")
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	dataURL, err := a.checkins.Photo(r.Context(), id)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	mime, data, err := store.DecodePhoto(dataURL)
+	if err != nil {
+		// A stored row that no longer decodes is corruption, not a client error.
+		a.fail(w, r, fmt.Errorf("checkin %s photo: %w", id, err))
+		return
+	}
+	// The id never gets a second image, so the bytes are immutable. private
+	// keeps shared caches out; nosniff stops a corrupt row from being guessed
+	// as HTML.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	httpx.Write(w, http.StatusOK, mime, data)
 }
 
 // skip is the wire representation of an excused day.

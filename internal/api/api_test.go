@@ -381,7 +381,8 @@ func TestEveryDataRouteRequiresAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse project id: %v", err)
 	}
-	if _, err := api.db.Checkins().Create(t.Context(), pid, store.CheckinInput{Value: 1}); err != nil {
+	c, err := api.db.Checkins().Create(t.Context(), pid, store.CheckinInput{Value: 1})
+	if err != nil {
 		t.Fatalf("seed checkin: %v", err)
 	}
 
@@ -391,6 +392,7 @@ func TestEveryDataRouteRequiresAdmin(t *testing.T) {
 		"/api/v1/projects/" + p.ID,
 		"/api/v1/projects/" + p.ID + "/stats",
 		"/api/v1/projects/" + p.ID + "/checkins",
+		"/api/v1/checkins/" + c.ID.String() + "/photo",
 		"/api/v1/projects/" + p.ID + "/skips",
 		"/api/v1/categories",
 		"/api/v1/stats/overview",
@@ -990,5 +992,80 @@ func TestReadyFailsWhenTheDatabaseIsGone(t *testing.T) {
 	resp, _ = api.do(t, http.MethodGet, "/api/v1/health", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("health with a closed database: %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestCheckinPhotoEndpoint(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	p := api.createProject(t, cookie, validProjectRequest("Proof"))
+
+	const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	resp, raw := api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins",
+		checkinRequest{Value: 1, Photo: png}, cookie)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("checkin: %d %s", resp.StatusCode, raw)
+	}
+	var c checkin
+	decode(t, raw, &c)
+	if !c.HasPhoto {
+		t.Fatal("create response does not report hasPhoto")
+	}
+
+	// The bytes are served lazily, with the image type and an immutable cache.
+	resp, raw = api.adminDo(t, http.MethodGet, "/api/v1/checkins/"+c.ID+"/photo", nil, cookie)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("photo: %d %s", resp.StatusCode, raw)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type = %q, want image/png", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); !strings.Contains(got, "private") || !strings.Contains(got, "immutable") {
+		t.Errorf("Cache-Control = %q, want private + immutable", got)
+	}
+	if len(raw) == 0 || raw[0] != 0x89 || string(raw[1:4]) != "PNG" {
+		t.Errorf("photo body is not a PNG: % x", raw[:min(len(raw), 8)])
+	}
+
+	// A record without a photo, and an unknown id, are plain 404s.
+	resp, raw = api.adminDo(t, http.MethodPost, "/api/v1/projects/"+p.ID+"/checkins",
+		checkinRequest{Value: 1}, cookie)
+	decode(t, raw, &c)
+	resp, raw = api.adminDo(t, http.MethodGet, "/api/v1/checkins/"+c.ID+"/photo", nil, cookie)
+	if code, _ := decodeError(t, raw); resp.StatusCode != http.StatusNotFound || code != "not_found" {
+		t.Errorf("photo without payload: %d %s", resp.StatusCode, code)
+	}
+	if resp, _ := api.adminDo(t, http.MethodGet, "/api/v1/checkins/"+uuid.NewV7().String()+"/photo", nil, cookie); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown photo: %d", resp.StatusCode)
+	}
+	if resp, _ := api.adminDo(t, http.MethodGet, "/api/v1/checkins/not-a-uuid/photo", nil, cookie); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("malformed photo id: %d", resp.StatusCode)
+	}
+}
+
+func TestPinnedProjectRoundTrip(t *testing.T) {
+	api := newTestAPI(t, 0)
+	cookie := api.login(t)
+	p := api.createProject(t, cookie, validProjectRequest("Pinned"))
+	if p.Pinned {
+		t.Fatal("a new project must start unpinned")
+	}
+
+	resp, raw := api.adminDo(t, http.MethodPatch, "/api/v1/projects/"+p.ID,
+		projectPatchRequest{Pinned: new(true)}, cookie, "If-Match", `"v1"`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("pin: %d %s", resp.StatusCode, raw)
+	}
+	var updated project
+	decode(t, raw, &updated)
+	if !updated.Pinned || updated.Version != 2 {
+		t.Errorf("pinned project = %+v", updated)
+	}
+
+	_, raw = api.adminDo(t, http.MethodGet, "/api/v1/projects", nil, cookie)
+	var listed listProjectsResponse
+	decode(t, raw, &listed)
+	if len(listed.Projects) != 1 || !listed.Projects[0].Pinned {
+		t.Errorf("list does not carry the pin: %+v", listed.Projects)
 	}
 }

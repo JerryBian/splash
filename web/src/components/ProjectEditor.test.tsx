@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { AppProvider } from '../hooks/useApp'
@@ -116,5 +116,33 @@ describe('ProjectEditor', () => {
     expect(screen.getByLabelText('名称')).toHaveValue('阅读')
     expect(screen.getByLabelText('每天目标')).toHaveValue(30)
     expect(screen.getByText('保存修改')).toBeInTheDocument()
+  })
+
+  it('creates a time-mode habit with a deadline and a reminder', async () => {
+    const fetchMock = stubFetch(routes())
+    render(
+      <AppProvider initial={adminBootstrap}>
+        <ProjectEditor projectId="new" />
+      </AppProvider>,
+    )
+
+    await userEvent.type(screen.getByLabelText('名称'), '准时睡觉')
+    await userEvent.click(screen.getByText('记录时间'))
+    fireEvent.change(screen.getByLabelText('准时目标（可选）'), { target: { value: '23:00' } })
+    fireEvent.change(screen.getByLabelText('每日提醒（可选）'), { target: { value: '22:30' } })
+    await userEvent.click(screen.getByText('创建项目'))
+
+    await waitFor(() => {
+      const post = callTo(fetchMock, '/projects', 'POST')
+      expect(post).toBeDefined()
+      expect(post?.body).toMatchObject({
+        mode: 'time',
+        schedule: 'daily',
+        target: 1,
+        unit: '次',
+        targetTime: '23:00',
+        reminderTime: '22:30',
+      })
+    })
   })
 })

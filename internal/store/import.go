@@ -55,7 +55,8 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 		in := ProjectInput{
 			Name: p.Name, Description: p.Description, Icon: p.Icon, Color: p.Color,
 			Nature: p.Nature, Schedule: p.Schedule, Mode: p.Mode, Target: p.Target,
-			Unit: p.Unit, Weekdays: p.Weekdays, Interval: p.Interval, StartDate: p.StartDate,
+			Unit: p.Unit, Weekdays: p.Weekdays, Interval: p.Interval,
+			TargetTime: p.TargetTime, ReminderTime: p.ReminderTime, StartDate: p.StartDate, Pinned: p.Pinned,
 		}
 		if p.CategoryID != uuid.Nil() {
 			in.CategoryID = p.CategoryID.String()
@@ -75,6 +76,12 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 		}
 		if c.Value <= 0 || c.Value > MaxTargetValue {
 			problems = append(problems, &FieldError{Field: "checkins", Message: "value out of range"})
+		}
+		if !ValidClock(c.Time) {
+			problems = append(problems, &FieldError{Field: "checkins", Message: "time must be HH:MM"})
+		}
+		if photoErr := validatePhoto(c.Photo); photoErr != nil {
+			problems = append(problems, &FieldError{Field: "checkins", Message: photoErr.Message})
 		}
 		if err := validateDate("localDate", c.LocalDate); err != nil {
 			problems = append(problems, err)
@@ -124,10 +131,11 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 	}
 	for _, p := range data.Projects {
 		n, err := exec(`INSERT OR IGNORE INTO projects (`+projectColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			p.ID.String(), p.Name, p.Description, p.Icon, p.Color, categoryArg(p.CategoryID),
 			p.Nature, string(p.Schedule), p.Mode, p.Target, p.Unit, weekdaysCSV(p.Weekdays),
-			p.Interval, p.StartDate, boolInt(p.Archived), toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
+			p.Interval, p.TargetTime, p.ReminderTime, p.StartDate, boolInt(p.Archived), boolInt(p.Pinned),
+			toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
 		if err != nil {
 			return counts, fmt.Errorf("import project: %w", err)
 		}
@@ -140,9 +148,9 @@ func (d *DB) Import(ctx context.Context, data ExportData) (ImportCounts, error) 
 		}
 	}
 	for _, c := range data.Checkins {
-		n, err := exec(`INSERT OR IGNORE INTO checkins (`+checkinColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.LocalDate,
-			toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt))
+		n, err := exec(`INSERT OR IGNORE INTO checkins (`+checkinColumns+`, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			c.ID.String(), c.ProjectID.String(), c.Value, c.Note, c.Mood, c.Time, c.LocalDate,
+			toMillis(c.CheckedAt), c.TZOffset, boolInt(c.Backfilled), toMillis(c.CreatedAt), c.Photo)
 		if err != nil {
 			return counts, fmt.Errorf("import checkin: %w", err)
 		}

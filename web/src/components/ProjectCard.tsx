@@ -4,8 +4,8 @@ import { useNow } from '../hooks/useNow'
 import { inkColorOf, splatter } from '../lib/confetti'
 import { formatCountdown } from '../lib/date'
 import { progressLabel, scheduleLabel } from '../lib/format'
-import { isBad, isComplete } from '../lib/schedule'
-import { CheckIcon, LockIcon, PlusIcon, XIcon } from './icons'
+import { isBad, isComplete, isTime } from '../lib/schedule'
+import { CheckIcon, ClockIcon, LockIcon, PinIcon, PlusIcon, XIcon } from './icons'
 import { NatureBadge } from './ui'
 
 /**
@@ -81,6 +81,11 @@ export function ProjectCard({
           <span className="card-title">
             {project.name}
             <NatureBadge nature={project.nature} />
+            {project.pinned ? (
+              <span className="card-pin" title="已置顶">
+                <PinIcon size={11} />
+              </span>
+            ) : null}
             {project.archived ? <span className="mini-chip">已归档</span> : null}
           </span>
           <span className="card-sub">
@@ -88,6 +93,11 @@ export function ProjectCard({
             {status !== undefined && status.streak > 0 ? (
               <span className="card-streak" title={bad ? `坚持 ${status.streak} 个周期` : `连续 ${status.streak} 个周期`}>
                 🔥{status.streak}
+              </span>
+            ) : null}
+            {project.reminderTime ? (
+              <span className="card-reminder" title={`每日 ${project.reminderTime} 提醒`}>
+                <ClockIcon size={11} /> {project.reminderTime}
               </span>
             ) : null}
           </span>
@@ -107,7 +117,7 @@ export function ProjectCard({
             </span>
           ) : (
             <span className="card-progress">
-              {bad ? null : (
+              {bad || isTime(project) ? null : (
                 <span className="bar">
                   <span className="bar-fill" style={barStyle} />
                 </span>

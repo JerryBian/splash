@@ -145,6 +145,18 @@ export const TrophyIcon = icon(
 export const LayersIcon = icon(
   <path d="m12 2 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 17l9 5 9-5" />,
 )
+export const PinIcon = icon(
+  <>
+    <path d="M9 3h6l-1 7 3 3H7l3-3-1-7Z" />
+    <path d="M12 13v8" />
+  </>,
+)
+export const CameraIcon = icon(
+  <>
+    <path d="M4 8h3l2-3h6l2 3h3v11H4Z" />
+    <circle cx="12" cy="13" r="3.5" />
+  </>,
+)
 
 /**
  * The splash mark: an ink blot with flying splatter and a knocked-out check.

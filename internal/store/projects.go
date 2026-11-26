@@ -33,7 +33,8 @@ type Projects struct{ db *DB }
 var _ ProjectStore = (*Projects)(nil)
 
 const projectColumns = `id, name, description, icon, color, category_id, nature, schedule, mode,
-	target, unit, weekdays, interval_value, start_date, archived, created_at, updated_at, version`
+	target, unit, weekdays, interval_value, target_time, reminder_time, start_date, archived, pinned,
+	created_at, updated_at, version`
 
 // Create validates and stores a new project.
 func (s *Projects) Create(ctx context.Context, in ProjectInput) (Project, error) {
@@ -78,17 +79,21 @@ func (s *Projects) Create(ctx context.Context, in ProjectInput) (Project, error)
 		Unit:          n.Unit,
 		Weekdays:      n.Weekdays,
 		Interval:      n.Interval,
+		TargetTime:    n.TargetTime,
+		ReminderTime:  n.ReminderTime,
 		StartDate:     n.StartDate,
+		Pinned:        n.Pinned,
 		Prerequisites: prereqs,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		Version:       1,
 	}
 	_, err := s.db.sql.ExecContext(ctx, `INSERT INTO projects (`+projectColumns+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID.String(), p.Name, p.Description, p.Icon, p.Color, categoryArg(p.CategoryID),
 		p.Nature, string(p.Schedule), p.Mode, p.Target, p.Unit, weekdaysCSV(p.Weekdays),
-		p.Interval, p.StartDate, boolInt(p.Archived), toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
+		p.Interval, p.TargetTime, p.ReminderTime, p.StartDate, boolInt(p.Archived), boolInt(p.Pinned),
+		toMillis(p.CreatedAt), toMillis(p.UpdatedAt), p.Version)
 	if err != nil {
 		return Project{}, fmt.Errorf("create project: %w", err)
 	}
@@ -198,13 +203,13 @@ func (s *Projects) Update(ctx context.Context, id uuid.UUID, patch ProjectPatch,
 
 	res, err := s.db.sql.ExecContext(ctx, `UPDATE projects SET
 		name = ?, description = ?, icon = ?, color = ?, category_id = ?, nature = ?, schedule = ?, mode = ?,
-		target = ?, unit = ?, weekdays = ?, interval_value = ?, start_date = ?, archived = ?,
-		updated_at = ?, version = ?
+		target = ?, unit = ?, weekdays = ?, interval_value = ?, target_time = ?, reminder_time = ?,
+		start_date = ?, archived = ?, pinned = ?, updated_at = ?, version = ?
 		WHERE id = ? AND version = ?`,
 		next.Name, next.Description, next.Icon, next.Color, categoryArg(next.CategoryID),
 		next.Nature, string(next.Schedule), next.Mode, next.Target, next.Unit, weekdaysCSV(next.Weekdays),
-		next.Interval, next.StartDate, boolInt(next.Archived), toMillis(next.UpdatedAt), next.Version,
-		id.String(), current.Version)
+		next.Interval, next.TargetTime, next.ReminderTime, next.StartDate, boolInt(next.Archived), boolInt(next.Pinned),
+		toMillis(next.UpdatedAt), next.Version, id.String(), current.Version)
 	if err != nil {
 		return Project{}, fmt.Errorf("update project %s: %w", id, err)
 	}
@@ -244,17 +249,19 @@ func scanProject(row rowScanner) (Project, error) {
 	var p Project
 	var id string
 	var categoryID sql.NullString
-	var archived int
+	var archived, pinned int
 	var weekdays string
 	var createdAt, updatedAt int64
 	if err := row.Scan(&id, &p.Name, &p.Description, &p.Icon, &p.Color, &categoryID,
-		&p.Nature, &p.Schedule, &p.Mode, &p.Target, &p.Unit, &weekdays, &p.Interval, &p.StartDate,
-		&archived, &createdAt, &updatedAt, &p.Version); err != nil {
+		&p.Nature, &p.Schedule, &p.Mode, &p.Target, &p.Unit, &weekdays, &p.Interval,
+		&p.TargetTime, &p.ReminderTime, &p.StartDate,
+		&archived, &pinned, &createdAt, &updatedAt, &p.Version); err != nil {
 		return Project{}, err
 	}
 	p.ID, _ = uuid.Parse(id)
 	p.CategoryID = scanCategoryID(categoryID)
 	p.Archived = archived != 0
+	p.Pinned = pinned != 0
 	p.Weekdays = parseWeekdaysCSV(weekdays)
 	p.CreatedAt = fromMillis(createdAt)
 	p.UpdatedAt = fromMillis(updatedAt)

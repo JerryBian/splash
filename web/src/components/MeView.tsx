@@ -6,7 +6,7 @@ import { useApp } from '../hooks/useApp'
 import { describeError } from '../lib/errors'
 import { DownloadIcon, LogOutIcon, MonitorIcon, MoonIcon, SealMark, SunIcon, UploadIcon } from './icons'
 import { ServicePanel } from './ServicePanel'
-import { Button, Segmented } from './ui'
+import { Button, Segmented, Switch } from './ui'
 
 const THEME_OPTIONS: { value: ThemeChoice; label: ReactNode }[] = [
   { value: 'light', label: <span className="theme-option"><SunIcon size={15} /> 浅色</span> },
@@ -20,7 +20,7 @@ const THEME_OPTIONS: { value: ThemeChoice; label: ReactNode }[] = [
  * account — signing out returns to the login gate.
  */
 export function MeView() {
-  const { session, projects, theme, setTheme, logout, refresh, toast } = useApp()
+  const { session, projects, theme, setTheme, notifications, logout, refresh, toast } = useApp()
   const [diagnostics, setDiagnostics] = useState<{ health: Health; version: VersionInfo } | null>(null)
   const [diagOpen, setDiagOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -104,6 +104,32 @@ export function MeView() {
           onChange={setTheme}
           options={THEME_OPTIONS}
         />
+      </section>
+
+      <section className="detail-section panel chart-panel" aria-label="提醒">
+        <h2 className="section-head">提醒</h2>
+        <p className="sheet-note">
+          项目设了「每日提醒」后，应用开着时到点会用站内提示提醒你；允许浏览器通知后，切到其他标签页也能收到系统通知。
+        </p>
+        {notifications.supported ? (
+          <Switch
+            checked={notifications.enabled}
+            onChange={(on) => {
+              if (on) void notifications.enable()
+              else notifications.disable()
+            }}
+            label="浏览器通知"
+            hint={
+              notifications.permission === 'denied'
+                ? '浏览器已拒绝通知，请在站点设置中恢复'
+                : notifications.permission === 'granted'
+                  ? '已允许；关闭只停止本设备的系统通知'
+                  : '打开时会请求浏览器权限'
+            }
+          />
+        ) : (
+          <p className="sheet-note">当前浏览器不支持系统通知，站内提示仍会照常工作。</p>
+        )}
       </section>
 
       <section className="detail-section panel chart-panel" aria-label="数据">

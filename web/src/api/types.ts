@@ -96,7 +96,7 @@ export type ProjectStatus = {
 }
 
 /** How completion is measured, orthogonal to the schedule (period layout). */
-export type ProjectMode = 'check' | 'value'
+export type ProjectMode = 'check' | 'value' | 'time'
 
 /**
  * Whether a project is a habit to build or a habit to break. Mirrors the
@@ -117,7 +117,8 @@ export type Project = {
   /** good = build the habit; bad = break it. Every project needs login to see. */
   nature: ProjectNature
   schedule: ScheduleType
-  /** check = one tick completes the period; value = accumulate to target. */
+  /** check = one tick completes the period; value = accumulate to target;
+   * time = record a clock time (with an optional punctuality deadline). */
   mode: ProjectMode
   target: number
   unit: string
@@ -125,8 +126,14 @@ export type Project = {
   weekdays: number[]
   /** Hours or days, per schedule. */
   interval: number
+  /** Punctuality deadline for time mode ("23:00"); "" = no deadline. */
+  targetTime: string
+  /** Optional daily reminder ("22:30"); "" = none. */
+  reminderTime: string
   startDate: string
   archived: boolean
+  /** Floats the project to the top of Today; pinned projects leave their category group. */
+  pinned: boolean
   /** Project ids that must be resolved the same day before this one unlocks. */
   prerequisites: string[]
   createdAt: string
@@ -143,6 +150,15 @@ export type Checkin = {
   value: number
   note?: string
   mood?: string
+  /** Recorded wall-clock time for time mode ("23:40"); "" otherwise. */
+  time?: string
+  /** A proof photo exists; fetch it from the photo URL, never inline. */
+  hasPhoto: boolean
+  /**
+   * The photo data URL, present only in a backup export/import — bulk API
+   * responses carry `hasPhoto` instead so history stays small.
+   */
+  photo?: string
   /** The client's calendar day, YYYY-MM-DD. */
   localDate: string
   checkedAt: string
@@ -189,7 +205,11 @@ export type Totals = {
   skipped: number
   completionRate: number
   onTimeRate: number
+  /** Records inside the interval or before the time-mode deadline. */
+  onTimeCount: number
   lateCount: number
+  /** Time mode: mean recorded clock time, "HH:MM". */
+  avgTime: string
   backfilled: number
   violations: number
 }
@@ -237,7 +257,10 @@ export type ProjectInput = {
   unit?: string
   weekdays?: number[]
   interval?: number
+  targetTime?: string
+  reminderTime?: string
   startDate: string
+  pinned?: boolean
   prerequisites?: string[]
 }
 
@@ -256,8 +279,11 @@ export type ProjectPatch = {
   unit?: string
   weekdays?: number[]
   interval?: number
+  targetTime?: string
+  reminderTime?: string
   startDate?: string
   archived?: boolean
+  pinned?: boolean
   /** Replaces the whole prerequisite list; [] clears it. */
   prerequisites?: string[]
 }
@@ -266,6 +292,10 @@ export type CheckinInput = {
   value: number
   note?: string
   mood?: string
+  /** Recorded clock time for time mode ("23:40"); empty = now. */
+  time?: string
+  /** Optional proof photo as a data URL; the server caps it at 400 KB. */
+  photo?: string
   /** Empty = today; a past date is a backfill (补卡). */
   date?: string
   tzOffset?: number

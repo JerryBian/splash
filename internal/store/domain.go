@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,6 +23,9 @@ const (
 	MaxTargetValue       = 1e6
 	MaxIntervalHours     = 720
 	MaxIntervalDays      = 365
+	// MaxPhotoBytes caps a proof photo's data URL so a check-in cannot bloat the
+	// database or an export (~300 KB of image).
+	MaxPhotoBytes = 400_000
 	// MinStartDate bounds history walks: a project "started" in 1970 would make
 	// every stats request iterate twenty thousand periods for no reason.
 	MinStartDate = "2000-01-01"
@@ -105,11 +110,84 @@ func (in CategoryInput) Normalized() CategoryInput {
 // ModeCheck means ONE tick completes the period: "read 30 minutes" is a
 // description of the obligation, not a quantity to accumulate — tick it or
 // leave an X. ModeValue accumulates check-in values toward Target (8 cups,
-// 15 km). Check mode forces Target to 1.
+// 15 km). ModeTime records a clock time per check-in (bedtime, wake-up, last
+// meal): the period completes when a time is logged, and TargetTime (when set)
+// turns punctuality into a metric — on-time rate, late count and average time.
+// Check and time modes force Target to 1.
 const (
 	ModeCheck = "check"
 	ModeValue = "value"
+	ModeTime  = "time"
 )
+
+// ValidMode reports whether m is a supported completion mode ("" defaults to
+// value at normalization time).
+func ValidMode(m string) bool {
+	switch m {
+	case "", ModeCheck, ModeValue, ModeTime:
+		return true
+	}
+	return false
+}
+
+// ValidClock reports whether s is a wall-clock time "HH:MM" (00:00..23:59), or
+// empty (meaning "not set"). Used for target/reminder times and recorded times.
+func ValidClock(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	h, ok1 := parseTwoDigits(s[0:2])
+	m, ok2 := parseTwoDigits(s[3:5])
+	return ok1 && ok2 && h <= 23 && m <= 59
+}
+
+func parseTwoDigits(s string) (int, bool) {
+	if len(s) != 2 || s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9' {
+		return 0, false
+	}
+	return int(s[0]-'0')*10 + int(s[1]-'0'), true
+}
+
+// ClockMinutes converts a validated "HH:MM" to minutes since midnight, or -1
+// for empty/invalid. Comparing minutes is how punctuality is decided.
+func ClockMinutes(s string) int {
+	if !ValidClock(s) || s == "" {
+		return -1
+	}
+	h, _ := parseTwoDigits(s[0:2])
+	m, _ := parseTwoDigits(s[3:5])
+	return h*60 + m
+}
+
+// MinutesClock renders minutes since midnight as "HH:MM", clamped to a day.
+func MinutesClock(mins int) string {
+	if mins < 0 {
+		return ""
+	}
+	mins %= 24 * 60
+	return fmt.Sprintf("%02d:%02d", mins/60, mins%60)
+}
+
+// LateForDeadline reports whether a recorded clock landed after a deadline.
+//
+// Comparison is circular, over a ±12h window around the deadline, not a plain
+// same-day string compare: "asleep by 00:30" logged at 23:40 is early (the
+// bedtime run starts in the evening), while a 23:00 deadline logged at 00:10 is
+// late. A zero or negative gap means on time, and anything more than half a day
+// after counts as the next day's early record rather than an absurdly late one.
+// Empty or malformed inputs are "not late": validation rejects them long before
+// analytics run, and a missing record must not invent a failure.
+func LateForDeadline(deadline, clock string) bool {
+	target, at := ClockMinutes(deadline), ClockMinutes(clock)
+	if target < 0 || at < 0 {
+		return false
+	}
+	diff := (at - target + 24*60) % (24 * 60)
+	return diff > 0 && diff <= 12*60
+}
 
 // Nature distinguishes a habit to build from a habit to break. It flips the
 // meaning of a check-in and of every derived verdict:
@@ -150,13 +228,20 @@ type Project struct {
 	CategoryID  uuid.UUID    `json:"categoryId"` // uuid.Nil() means uncategorized
 	Nature      string       `json:"nature"`     // NatureGood | NatureBad
 	Schedule    ScheduleType `json:"schedule"`
-	Mode        string       `json:"mode"`   // ModeCheck | ModeValue
-	Target      float64      `json:"target"` // units per period; unused by interval_hours and by bad habits
+	Mode        string       `json:"mode"`   // ModeCheck | ModeValue | ModeTime
+	Target      float64      `json:"target"` // units per period; unused by interval_hours, time and bad habits
 	Unit        string       `json:"unit"`   // UI-facing: "times", "cups", "minutes", "km"…
 	Weekdays    []int        `json:"weekdays"`
 	Interval    float64      `json:"interval"` // hours or days, per Schedule
-	StartDate   string       `json:"startDate"`
-	Archived    bool         `json:"archived"`
+	// TargetTime is the punctuality deadline for ModeTime ("23:00" = sleep by
+	// 23:00); "" means just log the time with no deadline. ReminderTime is an
+	// optional daily nudge ("22:30"), independent of the mode.
+	TargetTime   string `json:"targetTime"`
+	ReminderTime string `json:"reminderTime"`
+	StartDate    string `json:"startDate"`
+	Archived     bool   `json:"archived"`
+	// Pinned floats the project to the top of the Today page (a favourite).
+	Pinned bool `json:"pinned"`
 	// Prerequisites are projects that must be satisfied on the same day before
 	// this one counts as unlocked. All of them (AND), any depth of chain, no
 	// cycles. Violations are derived at read time, never stored.
@@ -172,19 +257,22 @@ func (p Project) ETag() string { return fmt.Sprintf(`"v%d"`, p.Version) }
 
 // ProjectInput is the payload accepted when creating a project.
 type ProjectInput struct {
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Icon        string       `json:"icon"`
-	Color       string       `json:"color"`
-	CategoryID  string       `json:"categoryId"` // "" or a UUID
-	Nature      string       `json:"nature"`
-	Schedule    ScheduleType `json:"schedule"`
-	Mode        string       `json:"mode"`
-	Target      float64      `json:"target"`
-	Unit        string       `json:"unit"`
-	Weekdays    []int        `json:"weekdays"`
-	Interval    float64      `json:"interval"`
-	StartDate   string       `json:"startDate"`
+	Name         string       `json:"name"`
+	Description  string       `json:"description"`
+	Icon         string       `json:"icon"`
+	Color        string       `json:"color"`
+	CategoryID   string       `json:"categoryId"` // "" or a UUID
+	Nature       string       `json:"nature"`
+	Schedule     ScheduleType `json:"schedule"`
+	Mode         string       `json:"mode"`
+	Target       float64      `json:"target"`
+	Unit         string       `json:"unit"`
+	Weekdays     []int        `json:"weekdays"`
+	Interval     float64      `json:"interval"`
+	TargetTime   string       `json:"targetTime"`
+	ReminderTime string       `json:"reminderTime"`
+	StartDate    string       `json:"startDate"`
+	Pinned       bool         `json:"pinned"`
 	// Prerequisites lists project ids that gate this one (same-day, AND).
 	Prerequisites []string `json:"prerequisites"`
 }
@@ -200,8 +288,12 @@ func (in ProjectInput) Validate(today string) error {
 		validateCategoryID(in.CategoryID),
 		validateNature(in.Nature),
 		validateMode(in.Mode),
-		validateSchedule(in.Schedule, in.Target, in.Unit, in.Weekdays, in.Interval),
+		validateSchedule(in.Schedule, in.Mode, in.Target, in.Unit, in.Weekdays, in.Interval),
 		validateNatureSchedule(in.Nature, in.Schedule),
+		validateModeSchedule(in.Mode, in.Schedule),
+		validateModeNature(in.Mode, in.Nature),
+		validateClock("targetTime", in.TargetTime),
+		validateClock("reminderTime", in.ReminderTime),
 		validateStartDate(in.StartDate, today),
 		validatePrerequisites(in.Prerequisites, uuid.Nil()),
 	}
@@ -219,6 +311,8 @@ func (in ProjectInput) Normalized() ProjectInput {
 	out.Nature = orDefault(strings.TrimSpace(in.Nature), NatureGood)
 	out.Mode = orDefault(strings.TrimSpace(in.Mode), ModeValue)
 	out.Unit = orDefault(strings.TrimSpace(in.Unit), "次")
+	out.TargetTime = strings.TrimSpace(in.TargetTime)
+	out.ReminderTime = strings.TrimSpace(in.ReminderTime)
 	out.StartDate = strings.TrimSpace(in.StartDate)
 	out.Prerequisites = normalizePrerequisites(in.Prerequisites)
 	// A bad habit records whether the lapse happened, never a quantity toward a
@@ -226,9 +320,13 @@ func (in ProjectInput) Normalized() ProjectInput {
 	if out.Nature == NatureBad {
 		out.Mode = ModeCheck
 	}
-	if out.Mode == ModeCheck {
+	if out.Mode == ModeCheck || out.Mode == ModeTime {
 		out.Target = 1
 		out.Unit = "次"
+	}
+	// A deadline only means something for a time-mode habit.
+	if out.Mode != ModeTime {
+		out.TargetTime = ""
 	}
 	if out.Schedule == ScheduleWeekdays {
 		out.Weekdays = normalizeWeekdays(in.Weekdays)
@@ -247,20 +345,23 @@ func (in ProjectInput) Normalized() ProjectInput {
 // ProjectPatch carries the fields a client wants to change; nil means "leave
 // alone". CategoryID is a *string so a patch can clear it with "".
 type ProjectPatch struct {
-	Name        *string       `json:"name,omitempty"`
-	Description *string       `json:"description,omitempty"`
-	Icon        *string       `json:"icon,omitempty"`
-	Color       *string       `json:"color,omitempty"`
-	CategoryID  *string       `json:"categoryId,omitempty"`
-	Nature      *string       `json:"nature,omitempty"`
-	Schedule    *ScheduleType `json:"schedule,omitempty"`
-	Mode        *string       `json:"mode,omitempty"`
-	Target      *float64      `json:"target,omitempty"`
-	Unit        *string       `json:"unit,omitempty"`
-	Weekdays    *[]int        `json:"weekdays,omitempty"`
-	Interval    *float64      `json:"interval,omitempty"`
-	StartDate   *string       `json:"startDate,omitempty"`
-	Archived    *bool         `json:"archived,omitempty"`
+	Name         *string       `json:"name,omitempty"`
+	Description  *string       `json:"description,omitempty"`
+	Icon         *string       `json:"icon,omitempty"`
+	Color        *string       `json:"color,omitempty"`
+	CategoryID   *string       `json:"categoryId,omitempty"`
+	Nature       *string       `json:"nature,omitempty"`
+	Schedule     *ScheduleType `json:"schedule,omitempty"`
+	Mode         *string       `json:"mode,omitempty"`
+	Target       *float64      `json:"target,omitempty"`
+	Unit         *string       `json:"unit,omitempty"`
+	Weekdays     *[]int        `json:"weekdays,omitempty"`
+	Interval     *float64      `json:"interval,omitempty"`
+	TargetTime   *string       `json:"targetTime,omitempty"`
+	ReminderTime *string       `json:"reminderTime,omitempty"`
+	StartDate    *string       `json:"startDate,omitempty"`
+	Archived     *bool         `json:"archived,omitempty"`
+	Pinned       *bool         `json:"pinned,omitempty"`
 	// Prerequisites replaces the whole edge list; an empty slice clears it.
 	Prerequisites *[]string `json:"prerequisites,omitempty"`
 }
@@ -269,8 +370,8 @@ type ProjectPatch struct {
 func (p ProjectPatch) Empty() bool {
 	return p.Name == nil && p.Description == nil && p.Icon == nil && p.Color == nil &&
 		p.CategoryID == nil && p.Nature == nil && p.Schedule == nil && p.Mode == nil && p.Target == nil &&
-		p.Unit == nil && p.Weekdays == nil && p.Interval == nil && p.StartDate == nil && p.Archived == nil &&
-		p.Prerequisites == nil
+		p.Unit == nil && p.Weekdays == nil && p.Interval == nil && p.TargetTime == nil && p.ReminderTime == nil &&
+		p.StartDate == nil && p.Archived == nil && p.Pinned == nil && p.Prerequisites == nil
 }
 
 // Validate checks only the fields present in the patch, against the project it
@@ -306,10 +407,22 @@ func (p ProjectPatch) Validate(current Project, today string) error {
 		problems = append(problems, validateMode(*p.Mode))
 	}
 	if p.Schedule != nil || p.Target != nil || p.Unit != nil || p.Weekdays != nil || p.Interval != nil || p.Mode != nil {
-		problems = append(problems, validateSchedule(merged.Schedule, merged.Target, merged.Unit, merged.Weekdays, merged.Interval))
+		problems = append(problems, validateSchedule(merged.Schedule, merged.Mode, merged.Target, merged.Unit, merged.Weekdays, merged.Interval))
 	}
 	if p.Nature != nil || p.Schedule != nil {
 		problems = append(problems, validateNatureSchedule(merged.Nature, merged.Schedule))
+	}
+	if p.Mode != nil || p.Schedule != nil {
+		problems = append(problems, validateModeSchedule(merged.Mode, merged.Schedule))
+	}
+	if p.Mode != nil || p.Nature != nil {
+		problems = append(problems, validateModeNature(merged.Mode, merged.Nature))
+	}
+	if p.TargetTime != nil {
+		problems = append(problems, validateClock("targetTime", *p.TargetTime))
+	}
+	if p.ReminderTime != nil {
+		problems = append(problems, validateClock("reminderTime", *p.ReminderTime))
 	}
 	if p.StartDate != nil {
 		problems = append(problems, validateStartDate(*p.StartDate, today))
@@ -361,11 +474,20 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 	if p.Interval != nil {
 		project.Interval = *p.Interval
 	}
+	if p.TargetTime != nil {
+		project.TargetTime = strings.TrimSpace(*p.TargetTime)
+	}
+	if p.ReminderTime != nil {
+		project.ReminderTime = strings.TrimSpace(*p.ReminderTime)
+	}
 	if p.StartDate != nil {
 		project.StartDate = strings.TrimSpace(*p.StartDate)
 	}
 	if p.Archived != nil {
 		project.Archived = *p.Archived
+	}
+	if p.Pinned != nil {
+		project.Pinned = *p.Pinned
 	}
 	if p.Mode != nil {
 		project.Mode = orDefault(strings.TrimSpace(*p.Mode), ModeValue)
@@ -377,9 +499,12 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 	if project.Nature == NatureBad {
 		project.Mode = ModeCheck
 	}
-	if project.Mode == ModeCheck {
+	if project.Mode == ModeCheck || project.Mode == ModeTime {
 		project.Target = 1
 		project.Unit = "次"
+	}
+	if project.Mode != ModeTime {
+		project.TargetTime = ""
 	}
 	if project.Schedule != ScheduleWeekdays {
 		project.Weekdays = []int{}
@@ -393,9 +518,79 @@ func (p ProjectPatch) ApplyTo(project *Project) {
 }
 
 func validateMode(raw string) *FieldError {
-	m := strings.TrimSpace(raw)
-	if m != "" && m != ModeCheck && m != ModeValue {
-		return &FieldError{Field: "mode", Message: "must be one of check, value"}
+	if !ValidMode(strings.TrimSpace(raw)) {
+		return &FieldError{Field: "mode", Message: "must be one of check, value, time"}
+	}
+	return nil
+}
+
+func validateClock(field, raw string) *FieldError {
+	if !ValidClock(strings.TrimSpace(raw)) {
+		return &FieldError{Field: field, Message: "must be a time in HH:MM form"}
+	}
+	return nil
+}
+
+// photoMIMEs is the closed set of image types the photo endpoint may serve.
+// Keeping it closed means a data URL can never smuggle an executable content
+// type (SVG, HTML) into a response the browser renders.
+var photoMIMEs = map[string]string{
+	"data:image/jpeg;base64": "image/jpeg",
+	"data:image/png;base64":  "image/png",
+	"data:image/webp;base64": "image/webp",
+}
+
+// DecodePhoto splits a validated data URL into its MIME type and raw bytes.
+// It is exported because the photo endpoint reads rows written by this domain
+// and must never trust their format blindly: a corrupt row is an error, not an
+// arbitrary Content-Type.
+func DecodePhoto(dataURL string) (mime string, data []byte, err error) {
+	prefix, payload, found := strings.Cut(strings.TrimSpace(dataURL), ",")
+	if !found {
+		return "", nil, errors.New("must be a base64 image data URL")
+	}
+	mime, ok := photoMIMEs[prefix]
+	if !ok {
+		return "", nil, errors.New("must be a JPEG, PNG or WebP data URL")
+	}
+	data, err = base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", nil, errors.New("must contain valid base64 image data")
+	}
+	if len(data) == 0 {
+		return "", nil, errors.New("must not be empty")
+	}
+	return mime, data, nil
+}
+
+func validatePhoto(raw string) *FieldError {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil
+	}
+	if len(s) > MaxPhotoBytes {
+		return &FieldError{Field: "photo", Message: fmt.Sprintf("must be at most %d bytes", MaxPhotoBytes)}
+	}
+	if _, _, err := DecodePhoto(s); err != nil {
+		return &FieldError{Field: "photo", Message: err.Error()}
+	}
+	return nil
+}
+
+// validateModeSchedule rejects time mode on the interval_hours countdown: a
+// clock-time record has no meaning on a rolling timer.
+func validateModeSchedule(mode string, s ScheduleType) *FieldError {
+	if strings.TrimSpace(mode) == ModeTime && s == ScheduleIntervalHours {
+		return &FieldError{Field: "schedule", Message: "interval_hours is not supported for time mode"}
+	}
+	return nil
+}
+
+// validateModeNature rejects time mode on a bad habit: bad habits are always
+// check mode (a lapse either happened or it did not).
+func validateModeNature(mode, nature string) *FieldError {
+	if strings.TrimSpace(mode) == ModeTime && strings.TrimSpace(nature) == NatureBad {
+		return &FieldError{Field: "mode", Message: "bad habits use check mode, not time mode"}
 	}
 	return nil
 }
@@ -469,6 +664,17 @@ type Checkin struct {
 	Value     float64   `json:"value"`
 	Note      string    `json:"note"`
 	Mood      string    `json:"mood"`
+	// Time is the recorded wall-clock time ("23:40") for a ModeTime project;
+	// empty for check/value modes. It is what punctuality analytics compare
+	// against the project's TargetTime.
+	Time string `json:"time"`
+	// Photo is an optional proof-of-done image as a data URL ("" = none). It is
+	// carried by exports and imports only: bulk API reads ship HasPhoto instead,
+	// so a page of history never drags hundreds of kilobytes of base64 along.
+	Photo string `json:"photo,omitempty"`
+	// HasPhoto is the cheap read-side flag; the bytes come from the photo
+	// endpoint when the UI actually needs to render them.
+	HasPhoto  bool      `json:"hasPhoto"`
 	LocalDate string    `json:"localDate"`
 	CheckedAt time.Time `json:"checkedAt"`
 	TZOffset  int       `json:"tzOffset"` // minutes east of UTC, as reported by the client
@@ -490,6 +696,8 @@ type CheckinInput struct {
 	Value    float64 `json:"value"`
 	Note     string  `json:"note"`
 	Mood     string  `json:"mood"`
+	Time     string  `json:"time"`
+	Photo    string  `json:"photo"`
 	Date     string  `json:"date"`
 	TZOffset int     `json:"tzOffset"`
 }
@@ -507,6 +715,12 @@ func (in CheckinInput) Validate(today string) error {
 	}
 	if in.Mood != "" && !slices.Contains(Moods, in.Mood) {
 		problems = append(problems, &FieldError{Field: "mood", Message: "is not a supported mood"})
+	}
+	if !ValidClock(strings.TrimSpace(in.Time)) {
+		problems = append(problems, &FieldError{Field: "time", Message: "must be a time in HH:MM form"})
+	}
+	if err := validatePhoto(in.Photo); err != nil {
+		problems = append(problems, err)
 	}
 	if in.Date != "" {
 		if err := validateDate("date", in.Date); err != nil {
@@ -527,6 +741,8 @@ func (in CheckinInput) Normalized() CheckinInput {
 		Value:    in.Value,
 		Note:     strings.TrimSpace(in.Note),
 		Mood:     in.Mood,
+		Time:     strings.TrimSpace(in.Time),
+		Photo:    strings.TrimSpace(in.Photo),
 		Date:     strings.TrimSpace(in.Date),
 		TZOffset: in.TZOffset,
 	}
@@ -671,16 +887,19 @@ func validateCategoryID(raw string) *FieldError {
 	return nil
 }
 
-func validateSchedule(s ScheduleType, target float64, unit string, weekdays []int, interval float64) *FieldError {
+func validateSchedule(s ScheduleType, mode string, target float64, unit string, weekdays []int, interval float64) *FieldError {
 	if !ValidSchedule(s) {
 		return &FieldError{Field: "schedule", Message: "must be one of daily, weekdays, weekly, monthly, interval_days, interval_hours"}
 	}
 	if utf8.RuneCountInString(strings.TrimSpace(unit)) > MaxUnitLength {
 		return &FieldError{Field: "unit", Message: fmt.Sprintf("must be at most %d characters", MaxUnitLength)}
 	}
+	// Check and time modes complete on a single record, so a quantity target is
+	// meaningless (normalization forces it to 1); only value mode needs one.
+	needsTarget := mode != ModeCheck && mode != ModeTime
 	switch s {
 	case ScheduleDaily, ScheduleWeekdays, ScheduleWeekly, ScheduleMonthly, ScheduleIntervalDays:
-		if target <= 0 || target > MaxTargetValue {
+		if needsTarget && (target <= 0 || target > MaxTargetValue) {
 			return &FieldError{Field: "target", Message: fmt.Sprintf("must be between 0 and %g", MaxTargetValue)}
 		}
 	}

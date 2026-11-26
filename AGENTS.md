@@ -17,10 +17,15 @@ to `internal/web/dist` and baked in with `//go:embed all:dist`. SQLite on disk.
   cross-compiles). Everything else is stdlib. Justify any new dependency.
 - **One role:** a single administrator (`SPLASH_ADMIN_*`). Every data route,
   reads included, requires login. No anonymous access, no per-project visibility.
-- **Domain:** categories; projects with six schedule families, two completion
-  modes (`check`/`value`) and a good/bad `nature`; check-ins; skips; a cycle-free
-  prerequisite graph; a **pure** schedule engine deriving streaks/misses/heatmaps/
-  trends/violations on read.
+- **Domain:** categories; projects with six schedule families, three completion
+  modes (`check`/`value`/`time`) and a good/bad `nature`; check-ins (value, note,
+  mood, a clock `time` for time mode, and an optional proof `photo`); skips; a
+  cycle-free prerequisite graph; a **pure** schedule engine deriving streaks/
+  misses/heatmaps/trends/violations on read. Time mode adds punctuality (on-time
+  rate / on-time count / late count / average time) vs `targetTime`;
+  `reminderTime` drives in-app reminders plus optional browser notifications;
+  `pinned` floats a project to the top of Today; achievements are derived
+  milestones (never stored).
 - **Bad habits** (`nature=bad`): a check-in records a lapse; any occurrence spoils
   the period (`missed`), a clean ended period is `done`, the streak counts periods
   survived clean. Always check mode; `interval_hours` is rejected.
@@ -114,6 +119,16 @@ to HTTP status.
   heatmaps use `local_date`; only interval-hours countdown + history ordering use
   `checked_at`. A backfill sets `local_date` to the requested day, `checked_at` to
   noon UTC of it. Don't "fix" one to match the other.
+- Punctuality compares clocks on a **24-hour circle** (`LateForDeadline` in Go,
+  `isLate` in TS): a deadline at 00:30 treats 23:40 as early and 00:40 as late, so
+  never replace it with a lexicographic `"HH:MM"` string compare.
+- Proof photos are data URLs capped at `MaxPhotoBytes` (400 KB). They are **never**
+  embedded in list/stats responses — those carry `hasPhoto`, and
+  `GET /checkins/{id}/photo` streams the bytes (immutable, private cache). Export
+  and import still carry the data URL, which is why `/import` uses the 32 MiB
+  configuration ceiling instead of the configured default body limit.
+- Pinned projects leave their category group and render once in Today's 置顶
+  section. Don't render them in both places.
 - Statuses are derived, never stored (only `checkins.backfilled` is stored). A
   backfill/undo repairs history retroactively; no migration needed for schedule
   rules.

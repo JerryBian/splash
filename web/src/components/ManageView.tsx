@@ -9,6 +9,7 @@ import {
   ArchiveIcon,
   LayersIcon,
   PencilIcon,
+  PinIcon,
   PlusIcon,
   SearchIcon,
   SlidersIcon,
@@ -57,6 +58,16 @@ export function ManageView() {
     try {
       await api.updateProject(project.id, { archived: !project.archived }, `"v${project.version}"`)
       toast(project.archived ? '已恢复项目' : '已归档项目', 'ok')
+      await refresh()
+    } catch (error) {
+      toast(describeError(error), 'error')
+    }
+  }
+
+  const togglePin = async (project: Project) => {
+    try {
+      await api.updateProject(project.id, { pinned: !project.pinned }, `"v${project.version}"`)
+      toast(project.pinned ? '已取消置顶' : '已置顶到今日页顶部', 'ok')
       await refresh()
     } catch (error) {
       toast(describeError(error), 'error')
@@ -157,6 +168,12 @@ export function ManageView() {
                   </span>
                 </button>
                 <span className="manage-actions">
+                  <IconButton
+                    label={project.pinned ? `取消置顶 ${project.name}` : `置顶 ${project.name}`}
+                    onClick={() => void togglePin(project)}
+                  >
+                    <PinIcon size={16} />
+                  </IconButton>
                   <IconButton label={`编辑 ${project.name}`} onClick={() => navigate(`#edit/${project.id}`)}>
                     <PencilIcon size={16} />
                   </IconButton>

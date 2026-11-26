@@ -59,8 +59,15 @@ func (a *API) mapError(err error) *httpx.Error {
 	}
 
 	if httpx.IsPayloadTooLarge(err) {
+		// Report the limit the reader actually enforced: /import raises it well
+		// above the configured default so photo-bearing backups fit.
+		limit := a.maxBody
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			limit = maxErr.Limit
+		}
 		return httpx.Errorf(http.StatusRequestEntityTooLarge, httpx.CodePayloadTooLarge,
-			"request body exceeds the %d byte limit", a.maxBody).WithErr(err)
+			"request body exceeds the %d byte limit", limit).WithErr(err)
 	}
 	if httpx.IsUnsupportedMediaType(err) {
 		return httpx.Errorf(http.StatusUnsupportedMediaType, httpx.CodeUnsupportedMedia,

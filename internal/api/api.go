@@ -172,6 +172,7 @@ func (a *API) Register(mux *http.ServeMux) {
 
 	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/checkins", a.guard(a.handleListCheckins))
 	a.addRoute(mux, "POST "+RoutePrefix+"/projects/{id}/checkins", a.guard(a.handleCreateCheckin))
+	a.addRoute(mux, "GET "+RoutePrefix+"/checkins/{id}/photo", a.guard(a.handleCheckinPhoto))
 	a.addRoute(mux, "DELETE "+RoutePrefix+"/checkins/{id}", a.guard(a.handleDeleteCheckin))
 
 	a.addRoute(mux, "GET "+RoutePrefix+"/projects/{id}/skips", a.guard(a.handleListSkips))

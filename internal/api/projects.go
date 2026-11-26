@@ -26,8 +26,11 @@ type project struct {
 	Unit          string         `json:"unit"`
 	Weekdays      []int          `json:"weekdays"`
 	Interval      float64        `json:"interval"`
+	TargetTime    string         `json:"targetTime"`
+	ReminderTime  string         `json:"reminderTime"`
 	StartDate     string         `json:"startDate"`
 	Archived      bool           `json:"archived"`
+	Pinned        bool           `json:"pinned"`
 	Prerequisites []string       `json:"prerequisites"`
 	CreatedAt     string         `json:"createdAt"`
 	UpdatedAt     string         `json:"updatedAt"`
@@ -78,23 +81,26 @@ func toProjectStatus(s store.Summary) *projectStatus {
 
 func toProject(p store.Project, status *store.Summary) project {
 	out := project{
-		ID:          p.ID.String(),
-		Name:        p.Name,
-		Description: p.Description,
-		Icon:        p.Icon,
-		Color:       p.Color,
-		Nature:      p.Nature,
-		Schedule:    string(p.Schedule),
-		Mode:        p.Mode,
-		Target:      p.Target,
-		Unit:        p.Unit,
-		Weekdays:    p.Weekdays,
-		Interval:    p.Interval,
-		StartDate:   p.StartDate,
-		Archived:    p.Archived,
-		CreatedAt:   formatTime(p.CreatedAt),
-		UpdatedAt:   formatTime(p.UpdatedAt),
-		Version:     p.Version,
+		ID:           p.ID.String(),
+		Name:         p.Name,
+		Description:  p.Description,
+		Icon:         p.Icon,
+		Color:        p.Color,
+		Nature:       p.Nature,
+		Schedule:     string(p.Schedule),
+		Mode:         p.Mode,
+		Target:       p.Target,
+		Unit:         p.Unit,
+		Weekdays:     p.Weekdays,
+		Interval:     p.Interval,
+		TargetTime:   p.TargetTime,
+		ReminderTime: p.ReminderTime,
+		StartDate:    p.StartDate,
+		Archived:     p.Archived,
+		Pinned:       p.Pinned,
+		CreatedAt:    formatTime(p.CreatedAt),
+		UpdatedAt:    formatTime(p.UpdatedAt),
+		Version:      p.Version,
 	}
 	if p.CategoryID != uuid.Nil() {
 		out.CategoryID = p.CategoryID.String()
@@ -167,7 +173,10 @@ type projectRequest struct {
 	Unit          string   `json:"unit"`
 	Weekdays      []int    `json:"weekdays"`
 	Interval      float64  `json:"interval"`
+	TargetTime    string   `json:"targetTime"`
+	ReminderTime  string   `json:"reminderTime"`
 	StartDate     string   `json:"startDate"`
+	Pinned        bool     `json:"pinned"`
 	Prerequisites []string `json:"prerequisites"`
 }
 
@@ -191,7 +200,10 @@ func (a *API) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		Unit:          req.Unit,
 		Weekdays:      req.Weekdays,
 		Interval:      req.Interval,
+		TargetTime:    req.TargetTime,
+		ReminderTime:  req.ReminderTime,
 		StartDate:     req.StartDate,
+		Pinned:        req.Pinned,
 		Prerequisites: req.Prerequisites,
 	})
 	if err != nil {
@@ -242,8 +254,11 @@ type projectPatchRequest struct {
 	Unit          *string   `json:"unit,omitempty"`
 	Weekdays      *[]int    `json:"weekdays,omitempty"`
 	Interval      *float64  `json:"interval,omitempty"`
+	TargetTime    *string   `json:"targetTime,omitempty"`
+	ReminderTime  *string   `json:"reminderTime,omitempty"`
 	StartDate     *string   `json:"startDate,omitempty"`
 	Archived      *bool     `json:"archived,omitempty"`
+	Pinned        *bool     `json:"pinned,omitempty"`
 	Prerequisites *[]string `json:"prerequisites,omitempty"`
 }
 
@@ -260,8 +275,11 @@ func (req projectPatchRequest) toPatch() store.ProjectPatch {
 		Unit:          req.Unit,
 		Weekdays:      req.Weekdays,
 		Interval:      req.Interval,
+		TargetTime:    req.TargetTime,
+		ReminderTime:  req.ReminderTime,
 		StartDate:     req.StartDate,
 		Archived:      req.Archived,
+		Pinned:        req.Pinned,
 		Prerequisites: req.Prerequisites,
 	}
 	if req.Schedule != nil {

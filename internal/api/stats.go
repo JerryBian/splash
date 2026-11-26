@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/JerryBian/splash/internal/config"
 	"github.com/JerryBian/splash/internal/httpx"
 	"github.com/JerryBian/splash/internal/store"
 )
@@ -87,8 +88,8 @@ func (a *API) handleOverview(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleExport serves GET /api/v1/export (admin): a full JSON backup, offered
-// as a download. Import is deliberately not offered — restoring is an
-// operator action on the database file, not an HTTP write.
+// as a download. POST /import restores the same shape additively; the two are
+// deliberately separate routes so a backup can be taken through a browser link.
 func (a *API) handleExport(w http.ResponseWriter, r *http.Request) {
 	data, err := a.export.Dump(r.Context())
 	if err != nil {
@@ -99,11 +100,18 @@ func (a *API) handleExport(w http.ResponseWriter, r *http.Request) {
 	a.write(w, r, http.StatusOK, data)
 }
 
+// maxImportBytes is the body cap for POST /import. It uses the configuration's
+// hard ceiling rather than the per-route default: a backup carries proof photos
+// as base64, and the 1 MiB default would reject even a handful of pictures.
+// Ordinary routes keep the configured limit, so the hard ceiling still bounds
+// the largest request the service will ever accept.
+const maxImportBytes = config.MaxAllowedRequestBodyBytes
+
 // handleImport serves POST /api/v1/import (admin): restore a JSON backup. The
 // body is the same shape GET /export produces. Import is additive by id, so it
 // never overwrites existing data and re-importing a backup is a no-op.
 func (a *API) handleImport(w http.ResponseWriter, r *http.Request) {
-	data, err := httpx.DecodeJSON[store.ExportData](w, r, a.maxBody)
+	data, err := httpx.DecodeJSON[store.ExportData](w, r, maxImportBytes)
 	if err != nil {
 		a.fail(w, r, err)
 		return

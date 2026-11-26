@@ -25,7 +25,8 @@ public; everything else answers `401` without a session.
 | `PATCH`  | `/projects/{id}`                     | admin   | Partial update. `If-Match` enforced in SQL → `412`          |
 | `DELETE` | `/projects/{id}`                     | admin   | Delete; check-ins and skips cascade                         |
 | `GET`    | `/projects/{id}/checkins`            | admin   | History. `from`, `to`, `limit`                              |
-| `POST`   | `/projects/{id}/checkins`            | admin   | Check in / backfill (`date` in the past)                    |
+| `POST`   | `/projects/{id}/checkins`            | admin   | Check in / backfill (`date` in the past); optional `time`, `photo` |
+| `GET`    | `/checkins/{id}/photo`               | admin   | Proof photo bytes; `404` when the record has none           |
 | `DELETE` | `/checkins/{id}`                     | admin   | Undo one check-in                                           |
 | `GET`    | `/projects/{id}/skips`               | admin   | Excused days                                                |
 | `POST`   | `/projects/{id}/skips`               | admin   | Excuse a day; duplicate → `409`                             |
@@ -33,6 +34,7 @@ public; everything else answers `401` without a session.
 | `GET`    | `/projects/{id}/stats`               | admin   | Summary, totals, heatmap (`weeks`), trend, recent, skips    |
 | `GET`    | `/stats/overview`                    | admin   | Cross-project dashboard (good progress / bad lapses apart)  |
 | `GET`    | `/export`                            | admin   | Full JSON backup, offered as a download                     |
+| `POST`   | `/import`                            | admin   | Restore a backup additively by id (32 MiB hard cap)         |
 | `GET`    | `/debug/pprof/*`                     | public  | Only with `SPLASH_ENABLE_PPROF=true`                        |
 
 The gate is applied once at route registration (`api.guard`), so reads and
@@ -70,6 +72,22 @@ Codes: `invalid_json`, `invalid_argument`, `not_found`, `conflict`,
 `precondition_failed`, `timeout`, `internal_error`, `unauthorized`,
 `rate_limited`.
 
+## Conventions worth knowing
+
+- **Time mode.** `mode: "time"` records a clock `time` per check-in and forces
+  `target` to 1 (`unit` becomes `次`). `targetTime` ("23:00") is an optional
+  punctuality deadline; the stats `totals` then add `onTimeRate`, `onTimeCount`,
+  `lateCount` and `avgTime`. `interval_hours` and `nature: "bad"` reject time mode.
+- **Photos.** A check-in may carry `photo`, a `data:image/(jpeg|png|webp);base64,…`
+  URL capped at 400 KB. Read responses never include the payload: they carry
+  `hasPhoto`, and the bytes live at `GET /checkins/{id}/photo`. Exports include
+  `photo`, which is why `/import` uses the 32 MiB request ceiling rather than the
+  configured default body limit.
+- **Pinned.** `pinned` is a project boolean; the UI floats pinned projects to the
+  top of Today. Patch it like any other field (`PATCH {"pinned":true}`).
+- **Reminders.** `reminderTime` is a daily nudge ("22:30") consumed by the client
+  while the app is open; the server stores it but never schedules anything.
+
 ## Example
 
 ```bash
@@ -90,6 +108,19 @@ curl -s -b jar -X POST localhost:8080/api/v1/projects \
 curl -s -b jar -X POST localhost:8080/api/v1/projects \
   -H 'Content-Type: application/json' \
   -d '{"name":"Late nights","icon":"🦉","color":"indigo","nature":"bad","schedule":"daily","startDate":"2026-11-01"}'
+
+# A time habit: asleep by 23:00, with a daily reminder at 22:30.
+curl -s -b jar -X POST localhost:8080/api/v1/projects \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Sleep","icon":"😴","color":"violet","mode":"time","schedule":"daily","targetTime":"23:00","reminderTime":"22:30","startDate":"2026-11-01"}'
+
+# Record the actual time (a photo data URL can ride along as "photo").
+curl -s -b jar -X POST localhost:8080/api/v1/projects/$SLEEP_ID/checkins \
+  -H 'Content-Type: application/json' -d '{"value":1,"time":"22:40"}'
+
+# Pin it to the top of Today.
+curl -s -b jar -X PATCH localhost:8080/api/v1/projects/$SLEEP_ID \
+  -H 'Content-Type: application/json' -H 'If-Match: "v1"' -d '{"pinned":true}'
 
 # Check in three cups, then read the statistics.
 curl -s -b jar -X POST localhost:8080/api/v1/projects/$ID/checkins \

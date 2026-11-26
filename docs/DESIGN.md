@@ -39,6 +39,43 @@ timezone), not the server's clock. Instants (`checked_at`) drive only the
 interval-hours countdown and history ordering. A backfill sets `local_date` to
 the requested day and `checked_at` to noon UTC of that day.
 
+## Time-of-day habits
+
+A time-mode check-in records a wall-clock `time` ("23:40") alongside the usual
+day. A period completes on one record, exactly like check mode; `targetTime`
+adds punctuality on top: on-time rate, on-time/late counts and the mean recorded
+time. The mean is **circular** (the vector mean on the 24-hour clock), so 23:50
+and 00:10 average to 00:00 rather than to a same-day 12:00; samples spread evenly
+around the clock have no meaningful mean, and the UI shows "—" there.
+
+Late is decided on a **24-hour circle**: the gap from the deadline to the record,
+wrapped into a day, counts as late only in the first ±12 hours. That is what
+makes "asleep by 00:30" treat 23:40 as early and 00:40 as late, without asking
+the user which side of midnight the deadline sits on. The credited `local_date`
+still comes from the client, so a record logged after midnight belongs to the
+new day; recording last night after the fact is what the backfill date is for.
+`LateForDeadline` in Go and `isLate` in TypeScript implement the same rule and
+carry the same table tests.
+
+## Pinned, reminders and photos
+
+`pinned` is one boolean on the project and the only stored ordering preference:
+a pinned project leaves its category group and renders once at the top of Today.
+
+Reminders are client-side on purpose (`reminderTime`): the server has no
+scheduler and no push channel. While the app is open, a reminder is due for a
+30-minute grace window after its time, never for a day already done/skipped/
+rest, and once per project per local day (the fired keys persist in
+localStorage). Browser notifications are opt-in from the settings page, because
+permission prompts not tied to a user gesture are ignored by modern browsers.
+
+A proof photo is one optional data URL on a check-in, capped at 400 KB. Bulk
+reads (list, stats, overview, history) carry only `hasPhoto`; the bytes come from
+`GET /checkins/{id}/photo`, which the browser caches as immutable. This keeps a
+history page small no matter how many photos exist. Export/import still embed
+the data URL so a backup is self-contained, which is why the import route has
+its own, larger body cap.
+
 ## Login means everything
 
 The whole service sits behind one administrator. Every data route — list,
@@ -69,12 +106,14 @@ statuses use shapes (dashed = skipped, × = missed) as well as color.
 
 ```
 Category 1──* Project 1──* Checkin   (value in the project's unit, note, mood,
-                    └──* Skip        local_date + checked_at instant)
+                    └──* Skip        clock time for time mode, optional photo,
+                                     local_date + checked_at instant)
 ```
 
 A `Project` carries one of six schedules; `target` means units per period
 (day / ISO week / calendar month / N-day window), except `interval_hours`,
-which has a rolling countdown instead of periods. Extending the domain means:
-add the aggregate in `internal/store`, its handlers in `internal/api`, and the
-mirror types in `web/src/api/types.ts` — the two ends of the contract change
-together.
+which has a rolling countdown instead of periods. It also carries the optional
+`targetTime` (punctuality deadline), `reminderTime` (daily nudge) and `pinned`
+(Today ordering). Extending the domain means: add the aggregate in
+`internal/store`, its handlers in `internal/api`, and the mirror types in
+`web/src/api/types.ts` — the two ends of the contract change together.

@@ -5,11 +5,11 @@ import { useApp } from '../hooks/useApp'
 import { navigate } from '../hooks/useNow'
 import { parseDay, tzOffset, weekdayName, weekdayOf } from '../lib/date'
 import { describeError } from '../lib/errors'
-import { activityLevel, isBad, needsValueSheet } from '../lib/schedule'
+import { activityLevel, isBad, isCheckable, needsValueSheet } from '../lib/schedule'
 import { CheckinSheet } from './CheckinSheet'
 import { ProgressRing } from './charts'
 import { ConfirmDialog } from './overlays'
-import { CalendarIcon, PlusIcon, SealMark } from './icons'
+import { CalendarIcon, PinIcon, PlusIcon, SealMark } from './icons'
 import { ProjectCard } from './ProjectCard'
 import { Button, Chip, EmptyState } from './ui'
 
@@ -78,14 +78,19 @@ export function TodayView() {
     [optimistic, activeFilter],
   )
 
+  // Pinned projects float above every category and leave their old group, so a
+  // pinned card never appears twice on the same page.
+  const pinned = useMemo(() => visible.filter((p) => p.pinned), [visible])
+  const unpinned = useMemo(() => visible.filter((p) => !p.pinned), [visible])
+
   const groups = useMemo(() => {
-    const used = categories.filter((c) => visible.some((p) => p.categoryId === c.id))
-    const uncategorized = visible.filter((p) => p.categoryId === '')
+    const used = categories.filter((c) => unpinned.some((p) => p.categoryId === c.id))
+    const uncategorized = unpinned.filter((p) => p.categoryId === '')
     return [
-      ...used.map((c) => ({ key: c.id, icon: c.icon, name: c.name, projects: visible.filter((p) => p.categoryId === c.id) })),
+      ...used.map((c) => ({ key: c.id, icon: c.icon, name: c.name, projects: unpinned.filter((p) => p.categoryId === c.id) })),
       ...(uncategorized.length > 0 ? [{ key: '', icon: '🗂️', name: '未分类', projects: uncategorized }] : []),
     ]
-  }, [categories, visible])
+  }, [categories, unpinned])
 
   const quickCheck = (project: Project) => {
     // Quick check-in: optimistic seal now, server truth right after.
@@ -110,7 +115,7 @@ export function TodayView() {
       return
     }
     const status = project.status?.status
-    if (status === 'done' || status === 'skipped' || status === 'rest' || needsValueSheet(project)) {
+    if ((status !== undefined && !isCheckable(status)) || needsValueSheet(project)) {
       setSheet({ project, date: today })
       return
     }
@@ -124,6 +129,16 @@ export function TodayView() {
 
   const lastWeek = overview.activity.slice(-7)
   const maxCount = Math.max(1, ...lastWeek.map((d) => d.count))
+
+  const renderCards = (list: Project[]) =>
+    list.map((project) => (
+      <ProjectCard
+        key={project.id}
+        project={project}
+        onOpen={() => navigate(`#project/${project.id}`)}
+        onStamp={handleStamp}
+      />
+    ))
 
   return (
     <div className="view">
@@ -199,26 +214,30 @@ export function TodayView() {
           }
         />
       ) : (
-        groups.map((group) => (
-          <section key={group.key || 'uncategorized'} className="group" aria-label={group.name}>
-            <h2 className="group-head">
-              <span aria-hidden="true">{group.icon}</span> {group.name}
-              <span className="group-count">
-                {group.projects.filter((p) => p.status?.status === 'done').length}/{group.projects.length}
-              </span>
-            </h2>
-            <div className="group-cards">
-              {group.projects.map((project) => (
-                <ProjectCard
-                  key={project.id}
-                  project={project}
-                  onOpen={() => navigate(`#project/${project.id}`)}
-                  onStamp={handleStamp}
-                />
-              ))}
-            </div>
-          </section>
-        ))
+        <>
+          {pinned.length > 0 ? (
+            <section className="group group-pinned" aria-label="置顶">
+              <h2 className="group-head">
+                <PinIcon size={14} /> 置顶
+                <span className="group-count">
+                  {pinned.filter((p) => p.status?.status === 'done').length}/{pinned.length}
+                </span>
+              </h2>
+              <div className="group-cards">{renderCards(pinned)}</div>
+            </section>
+          ) : null}
+          {groups.map((group) => (
+            <section key={group.key || 'uncategorized'} className="group" aria-label={group.name}>
+              <h2 className="group-head">
+                <span aria-hidden="true">{group.icon}</span> {group.name}
+                <span className="group-count">
+                  {group.projects.filter((p) => p.status?.status === 'done').length}/{group.projects.length}
+                </span>
+              </h2>
+              <div className="group-cards">{renderCards(group.projects)}</div>
+            </section>
+          ))}
+        </>
       )}
 
       {visible.length > 0 ? (
